@@ -4,6 +4,8 @@
 
 Finish the thesis by following the work checklist in `TODO.md`.
 
+Read [NOTES.md](NOTES.md) before every thesis task. It records differences between the proposed experiments and what the benchmark campaign ran.
+
 ## Project Structure
 
 - `summary/` captures the work completed so far. Read it before every thesis task and use it as context. Update the relevant summary when an edit changes its claims or scope.

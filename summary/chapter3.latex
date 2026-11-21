@@ -2,7 +2,7 @@
 
 \section{Abordagem}
 
-A avaliação proposta é predominantemente quantitativa, complementada pela documentação das decisões de implementação.
+A avaliação é predominantemente quantitativa, complementada pela documentação das decisões de implementação.
 
 \begin{itemize}
   \item $\mathbf{H}_1$: O uso do token Biscuit é funcionalmente viável no ecossistema MQTT, cobrindo a totalidade dos casos de uso de autenticação e autorização que o JWT pode apoiar no broker Mosquitto.
@@ -10,39 +10,39 @@ A avaliação proposta é predominantemente quantitativa, complementada pela doc
   \item $\mathbf{H}_3$: Em cenários de autorização complexos, em que a arquitetura baseada em JWT exige introspecção externa ou consulta a sistemas adicionais, o Biscuit demonstra desempenho superior em termos de latência e vazão.
 \end{itemize}
 
-Variar o tipo de token, a fonte de políticas (ACL estática, Dynamic Security, SQLite local ou serviço HTTP externo), o QoS, a quantidade de conexões simultâneas, o tamanho das mensagens e a complexidade das políticas (incluindo condições de tempo e atributos). Manter constantes hardware, sistema operacional e topologia física.
+Variamos o tipo de token, a fonte de políticas, a carga, o QoS e a complexidade das regras. Medimos latências, vazão e consumo de recursos do \emph{broker}, mantendo a máquina hospedeira e as imagens dos serviços ao longo da campanha.
 
 \subsection{Entidades e Fluxos}
 
-O emissor define as permissões iniciais, o cliente apresenta o token e o módulo decide se o Mosquitto deve permitir a operação. O desenho prevê duas comparações: ambos os formatos como credenciais de identidade com uma fonte de políticas equivalente, e Biscuit com restrições no próprio token diante de um fluxo JWT configurado para consultar políticas externas.
+O emissor define as permissões iniciais, o cliente apresenta o token e o módulo decide se o Mosquitto deve permitir a operação. Comparamos os formatos sob a mesma fonte de políticas e, nos testes com vínculo de identidade, exigimos para ambos a correspondência entre a identidade no token e o identificador MQTT. Também comparamos a autorização local com Biscuit à autorização por consulta HTTP com JWT.
 
 \section{Solução Implementada}
 
 A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo~\ref{chap:implementacao}.
 
-\section{Proposta de Ambiente}
+\section{Ambiente Experimental}
 
-Docker 29.0.x, Mosquitto 2.0.x, Rust 1.92.x, \texttt{biscuit\_auth} 6.x, \texttt{jsonwebtoken} 10.x e SQLite 3.51.x. Fixar o broker e os geradores de carga em núcleos físicos distintos. Aferir o canal com \texttt{iperf3} e emular latência, perda e limitação de banda com \texttt{tc}/\texttt{netem}. As opções propostas para carga e topologia são \texttt{mqtt-stresser}, \texttt{emqtt-bench}, Mininet e Containernet \cite{iperf3,mqtt-stresser,emqtt-bench,mininet,containernet}.
+O Docker Compose reuniu o Mosquitto e os serviços auxiliares. As cargas foram executadas com o \texttt{mqtt-loadgen}, normalmente com um contêiner por cliente, enquanto os testes dedicados de reautenticação simultânea foram executados na máquina hospedeira. A vazão da rede Docker foi aferida com \texttt{iperf3} \cite{iperf3}.
 
 \section{Cenários de Teste}
 
-A proposta inclui microbenchmarks, carga integrada de publicação e assinatura, carga sustentada e em rajadas, e falhas. Usar linhas de base sem autenticação, com autenticação nativa e com tokens usados apenas para autenticação de identidade.
+A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 clientes, e 10 mensagens por cliente para cargas de 200 clientes, em três rodadas. Utilizamos casos-base sem autenticação, com o módulo \emph{Dynamic Security} e com autorização pelo próprio token.
 
 \begin{itemize}
-  \item \textbf{MTU:} avaliar o efeito do tamanho do token com MTUs de 200, 500, 1500 e 9000~bytes.
-  \item \textbf{Reconexão simultânea:} reiniciar o broker e medir a recuperação sob reconexão em massa.
-  \item \textbf{Complexidade das políticas:} variar o Biscuit entre 1, 5 e 25 blocos e comparar a avaliação local com o fluxo JWT que consulta serviços externos.
-  \item \textbf{Latência externa:} variar o atraso entre 200~ms e 1~s e a perda entre 1\% e 5\% na rede de gerenciamento.
-  \item \textbf{Contingência:} usar uma política local restritiva no Biscuit quando o serviço externo de autorização estiver indisponível.
-  \item \textbf{Revogação:} comparar lista de revogação com validade de 5, 15 ou 60~min e renovação por \texttt{AUTH}.
-  \item \textbf{Delegação:} um cliente deriva um Biscuit com permissões limitadas à tarefa de outro cliente \cite{identity_management_for_agents}.
+  \item \textbf{MTU:} Avaliamos o efeito do tamanho do token com MTUs de 200, 500, 1500 e 9000~bytes nas combinações previstas para cada tamanho.
+  \item \textbf{Conexão simultânea e reconexão:} Sincronizamos o início das conexões e exercitamos, em cenários próprios, ciclos de reconexão.
+  \item \textbf{Complexidade das políticas:} Variamos o Biscuit entre 1, 5 e 25 blocos com as mesmas regras, e, em outra série, variamos as verificações em Datalog. Também testamos perfis de regras HTTP.
+  \item \textbf{Latência externa:} Introduzimos atrasos de 200~ms e 1~s no serviço de autorização, conforme o cenário.
+  \item \textbf{Arquitetura híbrida:} Testamos a entrega a múltiplos assinantes com políticas HTTP e híbridas.
+  \item \textbf{Revogação:} Alteramos permissões durante o tráfego e, nos testes de ciclo de vida, exercitamos a renovação por \texttt{AUTH}.
+  \item \textbf{Delegação:} Um cliente derivou um Biscuit com permissões limitadas e o transferiu para outro cliente publicar \cite{identity_management_for_agents}.
 \end{itemize}
 
 \section{Coleta e Análise de Dados}
 
-Medir latências de autenticação e autorização, separando verificação criptográfica de avaliação lógica. Medir também o tempo do \texttt{SYN} do TCP até a primeira publicação efetiva, vazão, CPU, memória, tamanho do token, frequência de consultas externas e carga relativa dos planos de controle e de dados.
+O gerador de carga registrou as medições do cliente, o módulo forneceu contadores de autenticação e autorização, e o Prometheus coletou amostras de CPU e memória do cAdvisor \cite{prometheus}. Os testes de MTU incluíram capturas com \texttt{tcpdump}. Após uma correção na contagem de sessões TCP, as 189 capturas aceitas foram revalidadas com os mesmos intervalos de medição e critérios de aceitação.
 
-Coletar telemetria do módulo e dos clientes, com \texttt{perf} e \texttt{tcpdump}; considerar InfluxDB ou Prometheus para séries temporais \cite{influxdb,prometheus}. Reportar desvio padrão e percentis $p50$, $p95$ e $p99$. Avaliar H$_1$ pelos casos funcionais, H$_2$ pelos cenários equivalentes e H$_3$ pelos cenários que variam a dependência de serviços externos. Linhas de código e complexidade ciclomática foram propostas como medidas complementares de ergonomia.
+O índice da auditoria vincula cada resultado aceito à configuração e à rodada. Os testes funcionais fornecem a evidência para a $\mathbf{H}_1$, as operações correspondentes para JWT e Biscuit fornecem os dados para a $\mathbf{H}_2$, e a comparação entre autorização local e externa fornece os dados para a $\mathbf{H}_3$.
 
 \chapter{Trabalhos Futuros}
 
