@@ -1,0 +1,244 @@
+%----------------------------------------------------------------------------------
+% Exemplo do uso da classe tcc.cls. Veja o arquivo .cls
+% para mais detalhes e instruções.
+%----------------------------------------------------------------------------------
+
+% Seleção de idioma da monografia. Por enquanto as únicas opções
+% suportadas são 'portuguese' e 'english'
+% Para impressão em frente e verso, use a opção 'twoside'. Da
+% mesma forma, use 'oneside' para impressão em um lado apenas.
+\documentclass[portuguese,oneside]{UFFStex}
+%\documentclass[english,oneside]{UFFStex}
+
+%----------------------------------------------------------------
+% Coloque seus pacotes abaixo.
+%
+% Obs.: muitos pacotes de uso comum do LaTeX, como amsmath,
+% geometry e url já são automaticamente incluídos pela classe
+% (veja o arquivo .cls). Isso torna obrigatória a presença destes
+% no sistema para o uso desta classe, mas ao mesmo tempo o uso se
+% torna mais simples.  Recomendo a instalação da versão mais
+% recente da distribuição TeXLive (para Windows e UNIXes):
+% www.tug.org/texlive/
+%
+% Pacotes e opções já incluídas automaticamente:
+%
+% \RequirePackage[T1]{fontenc}[2005/09/27]
+% \RequirePackage[utf8x]{inputenc}[2008/03/30]
+% \RequirePackage[english,brazil]{babel}[2008/07/06]
+% \RequirePackage[a4paper]{geometry}[2010/09/12]
+% \RequirePackage{textcomp}[2005/09/27]
+% \RequirePackage{lmodern}[2009/10/30]
+% \RequirePackage{indentfirst}[1995/11/23]
+% \RequirePackage{setspace}[2000/12/01]
+% \RequirePackage{textcase}[2004/10/07]
+% \RequirePackage{float}[2001/11/08]
+% \RequirePackage{amsmath}[2000/07/18]
+% \RequirePackage{amssymb}[2009/06/22]
+% \RequirePackage{amsfonts}[2009/06/22]
+% \RequirePackage{url}
+% \RequirePackage[table]{xcolor}[2007/01/21]
+%\RequirePackage{lastpage}
+%\RequirePackage{xparse}
+%\RequirePackage{xstring}
+%\RequirePackage{listofitems}
+%----------------------------------------------------------------
+% Para inserção de figuras.
+\usepackage{graphicx}
+% Utilize a opção 'pdftex' se você estiver usando o pdflatex (que
+% permite figuras em formatos como .jpg ou .png)
+%\usepackage[pdftex]{graphicx}
+\usepackage{tabularx}
+
+% Para tabelas com elementos ocupando mais de uma linha
+\usepackage{multirow}
+% Para frações na mesma linha (ex. ⅓).
+\usepackage{nicefrac}
+% Para inserir figuras lado a lado.
+ \usepackage{subfigure}
+% Para formatar algoritmos.
+% A opção [algo2e] é necessária para evitar conflitos
+% com as definições da classe.
+% https://linorg.usp.br/CTAN/macros/latex/contrib/algorithm2e/doc/algorithm2e.pdf
+\usepackage{algorithmic}
+\usepackage[portuguese,algo2e,boxruled]{algorithm2e}
+% Hyperlink em capitulos, seções, citações
+\usepackage[hidelinks]{hyperref}	
+% Bibliografia e citações padrão ABNT
+%https://mirrors.ibiblio.org/CTAN/macros/latex/contrib/abntex2/doc/abntex2cite-alf.pdf
+% Comandos: \citeonline{ref} \citeauthor{ref} \citeyear{ref}
+%\usepackage[num]{abntex2cite}	% numérica
+\usepackage[alf]{abntex2cite}	% alfabetica
+% Referência cruzada que já coloca o tipo (Tabela, Figura, etc)
+% a opção "brazilian" é para colocar em portugues (retirar a opção 
+% quando escrever o texto em ingles/english
+\usepackage[brazilian]{cleveref} 
+% Pacote para revisão de texto
+% alguns comandos de revisão:
+% \alert{texto entre chaves}  \highlight{texto entre chaves}
+% \remove{texto a ser removido} 
+% \replace{texto original}{texto novo}
+% \comment{texto original}{comentario adicionado}
+% precisa ajustar a margem para evitaqr warning
+\setlength {\marginparwidth }{2cm}
+\usepackage{easyReview} 
+\usepackage{seqsplit}
+
+%----------------------------------------------------------------
+% Autor (OBRIGATÓRIO)
+%----------------------------------------------------------------
+\author{Pedro Spegiorin}
+
+%----------------------------------------------------------------
+% Título (OBRIGATÓRIO). Devem ser passados DOIS parâmetros,
+% o título em português E o inglês, não importando o idioma
+% escolhido. Os títulos são utilizados para a montagem da capa,
+% resumo e abstract mais tarde.
+%----------------------------------------------------------------
+
+%\title{Análise da viabilidade de JWTs e Biscuits no Broker MQTT Mosquitto}
+\title{Análise da viabilidade do token Biscuit no Broker MQTT Mosquitto}
+      {Analysis of the feasibility of the Biscuit token in the MQTT Broker Mosquitto}
+
+%----------------------------------------------------------------
+% Opções para o tipo de trabalho (OBRIGATÓRIO)
+%----------------------------------------------------------------
+\tipotrabalho{\tci}         % Trabalho de Conclusão I
+%\tipotrabalho{\tcii}        % Trabalho de Conclusão II
+
+%----------------------------------------------------------------
+% Seleção do curso ("este trabalho é um requisito parcial para
+% obtenção do grau de Bacharel em Ciência da Computação").
+%----------------------------------------------------------------
+\curso{\cc} % Ciência da Computação
+
+%----------------------------------------------------------------
+% Orientador (e Co-orientador, caso haja um). É OBRIGATÓRIO
+% informar pelo menos o orientador.
+%----------------------------------------------------------------
+\orientador{Marco Aurélio Spohn}
+%\coorientador{Ciclano de Farias}
+
+%----------------------------------------------------------------
+% Palavras chave e Keywords
+% Informar pelo menos 1 e no máximo 5 palavras chaves e Keywords,
+%  separadas por virgula.
+%----------------------------------------------------------------
+\palavraschave{MQTT, Biscuit, JWT, Segurança, Comparativa}
+              {MQTT, Biscuit, JWT, Security, Benchmark}
+
+%----------------------------------------------------------------
+% A capa é inserida automaticamente. Por isso não é necessário
+% chamar \maketitle
+%----------------------------------------------------------------
+\begin{document}
+
+%----------------------------------------------------------------
+% Ficha catalográfica (OBRIGATÓRIO para TCC II)
+%  Você pode gerar a ficha neste link também: 
+%   https://ficha.uffs.edu.br/
+%----------------------------------------------------------------
+\fichacatalografica
+
+%----------------------------------------------------------------
+% Folha de aprovação (OBRIGATÓRIO para TCC II)
+%   Primeiro parâmetro é a data da defesa
+%   Demais parâmetros são os membros da banca (pelo menos 2 nomes)
+%   Não precisa passar o nome do Orientador
+%----------------------------------------------------------------
+\folhadeaprovacao{11/12/2025}{Andrei de Almeida Sampaio Braga - UFFS}{Samuel da Silva Feitosa - UFFS}{}
+
+%----------------------------------------------------------------
+% Depois da folha de aprovação vem a dedicatória e a epígrafe.
+%----------------------------------------------------------------
+\dedicatoria{Dedico este trabalho aos meus pais, Marcelo Spegiorin e Debora Michele Bonfante, ao meu irmão, Eduardo Spegiorin, e ao grande programador Terry A. Davis.}
+
+\epigrafe{Javascript Object Signing and Encryption is a Bad Standard That Everyone Should Avoid.}
+         {Scott Arciszewski}
+
+%----------------------------------------------------------------
+% Também dá para fazer as duas na mesma página:
+%----------------------------------------------------------------
+%\dedigrafe{Dedico este trabalho a meus pais.}
+%          {The art of simplicity is a puzzle of complexity.}
+%          {Douglas Horton}
+
+%----------------------------------------------------------------
+% A seguir, a página de agradecimentos (OPCIONAL):
+%----------------------------------------------------------------
+\begin{agradecimentos}
+
+Agradeço aos Professores Marco Aurélio Spohn, Andrei de Almeida Sampaio Braga e Samuel da Silva Feitosa, e aos meus colegas Pedro Henrique Piaia Dariva e Paulo Henrique Hollenbach Muller.
+
+\end{agradecimentos}
+
+%----------------------------------------------------------------
+% Resumo (OBRIGATÓRIO)
+%  As palavras chave são informadas no preambulo lá emcima (\palavraschave)
+%----------------------------------------------------------------
+\begin{resumo}
+A segurança em redes IoT baseadas no protocolo MQTT exige mecanismos de autorização que equilibrem proteção e eficiência. Este trabalho aborda as limitações do padrão JSON Web Token (JWT) em relação ao token Biscuit, um token de capacidade que oferece delegação e atenuação descentralizadas. O objetivo principal é implementar e avaliar um módulo de segurança para o broker Mosquitto, desenvolvida em Rust, que suporte nativamente ambos os formatos. A metodologia adota uma abordagem predominantemente quantitativa para comparar ambas as tecnologias quanto à latência, à vazão e ao consumo de recursos computacionais. O estudo visa validar a viabilidade prática do Biscuit, analisando se os benefícios compensam o maior custo de processamento esperado, contribuindo com um protótipo reprodutível e diretrizes para a adoção de modelos de autorização mais autônomos que alavanquem sua arquitetura.
+\end{resumo}
+
+%----------------------------------------------------------------
+% Abstract (OBRIGATÓRIO)
+% %  As keywords são informadas no preambulo lá emcima (\palavraschave)
+%----------------------------------------------------------------
+\begin{abstract}
+Security in IoT networks based on the MQTT protocol requires authorization mechanisms that balance protection and efficiency. This work addresses the limitations of the JSON Web Token (JWT) standard compared to Biscuit, a capability token that provides offline attenuation and delegation. The main objective is to implement and evaluate a security plugin for the Mosquitto broker, developed in Rust, that natively supports both formats. The methodology adopts a predominantly quantitative approach to compare the two technologies across latency, throughput, and resource consumption. The study aims to validate the practical viability of Biscuit by analyzing whether the benefits outweigh the expected higher processing cost, and to contribute a reproducible prototype and guidelines for adopting more autonomous authorization models that leverage its architecture.
+\end{abstract}
+
+%----------------------------------------------------------------
+% Listas e sumário, nessa ordem. Somente o sumário é obrigatório,
+% portanto, comente as outras listas, caso sejam desnecessárias.
+%----------------------------------------------------------------
+\listoffigures       % Lista de figuras      (OPCIONAL)
+\listoftables        % Lista de tabelas      (OPCIONAL)
+%\listofalgorithms    % Lista de algoritmos   (OPCIONAL)
+%\listofacronyms      % Lista de siglas       (OPCIONAL)
+%\listofsymbols       % Lista de símbolos     (OPCIONAL)
+\tableofcontents     % Sumário               (OBRIGATÓRIO)
+
+%----------------------------------------------------------------
+% Aqui começa o desenvolvimento do trabalho. Para uma melhor
+% organização do documento, separe-o em arquivos,
+% um para cada capítulo. Para isso, utilize o comando \include,
+% como mostrado abaixo.
+%----------------------------------------------------------------
+% \include{capitulos/capitulo_11}
+\include{capitulos/capitulo_1}
+\include{capitulos/capitulo_2}
+\include{capitulos/capitulo_3}
+%\include{capitulos/capitulo_11}
+
+
+%----------------------------------------------------------------
+% Aqui vai a bibliografia. 
+% Existem 2 estilos de citação definidos ao instanciar o 
+% package abnt2tex: use
+% 'alf' para citações do tipo [Abc+] ou [XYZ] (em ordem
+% alfabética na bibliografia);
+% 'num' para citações
+% numéricas do tipo [1], [20], etc., em ordem de referência.
+%----------------------------------------------------------------
+\bibliography{bibliografia}
+
+
+%----------------------------------------------------------------
+% Após \appendix, se iniciam os capítulos de Apêndice, com
+% numeração alfabética.
+%----------------------------------------------------------------
+% \appendix
+% \chapter{Meu primeiro apêndice}
+% \chapter{My second appendix}
+
+%----------------------------------------------------------------
+% Aqui vão os "capítulos" de anexos. Cada anexo deve
+% ser considerado um capítulo.
+%----------------------------------------------------------------
+% \anexos
+% \chapter{Meu primeiro anexo}
+% \chapter{My second attachment}V
+
+% E aqui (para a felicidade de todos) termina o documento.
+\end{document}

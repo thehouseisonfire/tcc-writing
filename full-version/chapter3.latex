@@ -1,0 +1,108 @@
+\chapter{Metodologia}
+
+\section{Abordagem}
+
+Esta pesquisa adota uma abordagem predominantemente quantitativa, complementada por documentação qualitativa sobre aspectos de engenharia de software envolvidos no desenvolvimento da solução. Para a avaliação experimental, definem-se três hipóteses principais:
+
+\begin{itemize}
+  \item $\mathbf{H}_1$: O uso do token Biscuit é funcionalmente viável no ecossistema MQTT, cobrindo a totalidade dos casos de uso de autenticação e autorização que o JWT pode apoiar no broker Mosquitto.
+  \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários onde ambos possuem apoio nativo à funcionalidade (e.g., autenticação de identidade e verificações de integridade).
+  \item $\mathbf{H}_3$: Em cenários de autorização complexos, em que a arquitetura baseada em JWT exige introspecção externa ou consulta a sistemas adicionais, o Biscuit demonstra desempenho superior em termos de latência e vazão.
+\end{itemize}
+
+Entre as variáveis independentes, a primária é o \textbf{tipo de token}, cruzada com diferentes fontes de políticas: ACLs estáticas nativas do Mosquitto, ACLs dinâmicas (via módulo \emph{Dynamic Security}), verificação em banco de dados local (na mesma instância do \emph{broker}) e chamadas a serviços externos de autorização via HTTP.
+
+Adicionalmente, haverá variação nos parâmetros do protocolo MQTT, especificamente nos níveis de Qualidade de Serviço (QoS), na carga imposta ao sistema (número de conexões simultâneas e tamanho das mensagens) e na complexidade das políticas de acesso (variando de regras simples a condicionais baseadas em tempo e em atributos).
+
+As variáveis dependentes concentram-se em métricas de desempenho. Serão coletadas as latências de autenticação e autorização (tempo de processamento durante as ações de publicação e inscrição), distinguindo-se o tempo de processamento criptográfico do de avaliação lógica. Monitorar-se-á também a vazão (mensagens por segundo), a relação de carga entre o plano de controle e o plano de dados, e o consumo de recursos do sistema (CPU e memória), isolando o impacto do tamanho dos tokens e da frequência de chamadas externas. O tempo de estabelecimento da conexão (do pacote \texttt{SYN} do TCP até a primeira publicação efetiva) será avaliado como uma variável composta.
+
+Como variáveis de controle, o hardware, a versão do sistema operacional e a topologia física da rede permanecerão constantes em todas as baterias de testes.
+
+\subsection{Entidades e Fluxos}
+
+O experimento envolve cinco entidades lógicas distintas:
+
+\begin{itemize}
+ \item \textbf{Emissor de Tokens:} Entidade detentora das chaves privadas, responsável pela emissão de tokens contendo credenciais e permissões iniciais.
+ \item \textbf{Fonte de Políticas (PIP):} Entidade que detém a "verdade" sobre as regras de acesso (ACLs, bancos de dados ou serviços externos).
+ \item \textbf{Avaliador de Políticas (PDP):} O módulo de extensão do Mosquitto a ser desenvolvido, responsável pelo processamento das regras.
+ \item \textbf{Ponto de Aplicação (PEP):} O servidor Mosquitto equipado com o módulo. Verifica a assinatura dos tokens (via chave pública estática) e consulta o PDP para permitir ou negar as solicitações.
+ \item \textbf{Cliente:} Dispositivo que solicita acesso a tópicos. Requisita, armazena e apresenta o token ao PEP. No caso específico do Biscuit, pode anexar blocos de atenuação aos tokens que detêm.
+\end{itemize}
+
+Devido às características arquiteturais de cada tecnologia, o fluxo de consulta ao PIP varia significativamente:
+
+\textbf{Fluxo Biscuit:} Visto que o Biscuit suporta atenuação (mas não expansão) de direitos, o Emissor deve conhecer as permissões máximas no momento da criação do token. A consulta ao PIP primário ocorre majoritariamente na emissão. A partir deste ponto, o próprio token atua como um PIP portável até sua invalidação, reduzindo a necessidade de consultas externas.
+
+\textbf{Fluxo JWT:} Como o JWT padrão não atua como um token de capacidade efetivo (apenas carrega declarações de identidade ou papéis), o PDP frequentemente precisa consultar o PIP em tempo real a cada solicitação para validar permissões complexas ou granulares.
+
+Para garantir a paridade dos testes e evitar vieses, os cenários comuns ao uso de JWT, em que o token desempenha apenas o papel de identificação e o PDP busca permissões detalhadas no momento do acesso, também serão replicados na arquitetura do Biscuit para fins de comparação direta.
+
+\section{Proposta de Solução}
+
+A solução proposta consiste no desenvolvimento de um módulo de extensão para o Mosquitto, desenvolvido em Rust. A escolha justifica-se pelas garantias de segurança de memória e de desempenho do Rust, além da disponibilidade nativa da implementação de referência do Biscuit. O artefato final será uma biblioteca dinâmica (\emph{Shared Object} - \texttt{.so}) carregada em tempo de execução pelo Mosquitto.
+
+Utilizando a ferramenta \texttt{cbindgen}, serão gerados os cabeçalhos C (\texttt{.h}) que expõem as funções Rust para a API de plugins do Mosquitto (focada na versão 2.0+ e protocolo MQTT 5.0). As funções exportadas interceptarão eventos do \emph{broker}, especificamente: \texttt{MOSQ\_EVT\_BASIC\_AUTH} e \texttt{MOSQ\_EVT\_EXT\_AUTH} para autenticação; e \texttt{MOSQ\_EVT\_ACL\_CHECK}, \texttt{MOSQ\_EVT\_MESSAGE} e \texttt{MOSQ\_EVT\_CONTROL} para autorização de publicação, assinatura e controle.
+
+Para emissão e verificação, o módulo integrará as bibliotecas \texttt{jsonwebtoken} e \texttt{biscuit\_auth}. Por padrão, assume-se que os clientes requisitarão tokens a uma autoridade externa antes de contatar o \emph{broker}. O servidor terá a chave pública raiz configurada previamente \cite{rust_jsonwebtoken}.
+
+O fluxo de conexão seguirá as especificações do MQTT 5.0:
+\begin{enumerate}
+    \item Os clientes enviarão seus tokens através do campo \texttt{password} do pacote \texttt{CONNECT}. O limite de 65kB (definido pelo protocolo) é suficiente para acomodar ambos os tipos de token.
+    \item O \emph{broker} iniciará a sessão após validar a assinatura criptográfica.
+    \item Para gerenciar a expiração sem desconectar o cliente, será implementado um fluxo de reautenticação via pacotes \texttt{AUTH}. Ao expirar, o cliente requisitará um novo token e o enviará ao Mosquitto via outro pacote \texttt{AUTH}, permitindo a renovação transparente da sessão.
+\end{enumerate}
+
+Para a autorização contínua, a solução otimizará o desempenho do Biscuit, evitando a reverificação criptográfica completa a cada mensagem e realizando apenas a avaliação de políticas (Datalog). Se viável, será empregado \emph{caching} para regras estáticas, reavaliando apenas as regras contextuais a cada mensagem. O uso de pacotes \texttt{AUTH} também permitirá informar motivos específicos de rejeição, facilitando a depuração.
+
+\section{Proposta de Ambiente}
+
+O ambiente experimental será padronizado com Docker (versão 29.0.x), hospedando o Mosquitto (2.0.x) e os clientes em contêineres isolados. O desenvolvimento do módulo utilizará Rust (versão 1.92.x), integrando as bibliotecas \texttt{biscuit\_auth} (6.x, com apoio ao Biscuit 3.0+) e \texttt{jsonwebtoken} (10.x.x) \cite{rust_jsonwebtoken}. O banco de dados SQLite (3.51.x) será utilizado para cenários que exijam persistência local de políticas de acesso (excluindo ACLs estáticas e o módulo \emph{Dynamic Security}).
+
+Para assegurar a integridade dos testes e minimizar ruídos de vizinhança, a opção \texttt{--cpuset} do Docker será utilizada para fixar os processos do \emph{broker} e dos geradores de carga em núcleos físicos distintos e consistentes da máquina hospedeira.
+
+A emulação de rede utilizará o \texttt{iperf3} para aferir a capacidade nominal do canal, enquanto o \texttt{tc} (com o módulo \texttt{netem}) introduzirá latência, perda de pacotes e limitação de banda de forma controlada \cite{iperf3}. Os testes de carga utilizarão ferramentas especializadas como \texttt{mqtt-stresser} e \texttt{emqtt-bench} \cite{mqtt-stresser,emqtt-bench}. Topologias mais complexas serão orquestradas via Mininet ou Containernet \cite{mininet,containernet}.
+
+\section{Cenários de Teste}
+
+A bateria de testes divide-se em quatro categorias: isolados (microbenchmarks), integrados (cargas de trabalho pub/sub), em escala (sustentada e rajadas) e de falhas (recuperação e latência).
+
+Inicialmente, serão estabelecidos casos-base para definir a latência mínima e a vazão máxima do ambiente (sem autenticação e com autenticação nativa). Em seguida, avalia-se o uso de tokens apenas para autenticação de identidade, o que representa o "melhor caso" teórico para o JWT.
+
+Os cenários de destaque incluem:
+
+\textbf{Fragmentação e MTU (\emph{Maximum Transmission Unit}):} Manipulação do MTU via \texttt{tc} (200B, 500B, 1500B, 9000B) para identificar o ponto de inflexão em que o tamanho do token (especialmente Biscuits atenuados com múltiplos blocos) provoca fragmentação TCP excessiva e degrada o desempenho.
+
+\textbf{Problema da Manada (\emph{Thundering Herd}):} Simulação da reinicialização do \emph{broker} com a reconexão simultânea de um grande número de clientes. O objetivo é avaliar se o custo computacional da verificação de assinatura do Biscuit impede a recuperação rápida do sistema em comparação com o JWT.
+
+\textbf{Complexidade de Políticas:} Aumento progressivo de blocos e de regras lógicas no Biscuit (1, 5, 25 blocos) diante de solicitações constantes do mecanismo JWT a serviços externos para obter novos tokens. Busca-se validar a eficiência da verificação local do Biscuit diante da latência de múltiplas chamadas.
+
+\textbf{Latência Externa:} Introdução de degradação na rede de gerenciamento (200ms a 1s, 1\% a 5\% de perda). Espera-se que o Biscuit mantenha desempenho estável (por ser autocontido), enquanto o modelo JWT, dependente de introspecção, sofra degradação na vazão.
+
+\textbf{Arquitetura Híbrida e Contingência:} Teste em que Biscuits são avaliados como JWTs (apenas identidade) com autorização externa em operação normal, mas carregam políticas latentes para avaliação local (com acesso reduzido/seguro) caso o serviço externo falhe.
+
+\textbf{Revogação e Ciclo de Vida:} Comparação entre verificação em lista de revogação (tokens de longa duração) \emph{versus} tokens de curta validade (5, 15, 60 min) com renovação frequente via fluxo \texttt{AUTH}.
+
+\textbf{Delegação:} Simulação de fluxo em que clientes "mestres" emitem tokens atenuados para clientes "trabalhadores" com permissões estritamente limitadas à tarefa, explorando as capacidades de descentralização exclusivas do Biscuit, como especulado por \citeonline{identity_management_for_agents}.
+
+\section{Coleta e Análise de Dados}
+
+A coleta de dados será automatizada por meio de telemetria em tempo real, extraindo métricas do módulo Mosquitto, dos clientes simulados e de ferramentas do sistema (\texttt{perf}, \texttt{tcpdump}). Um componente exportador persistirá as séries temporais em bancos de dados adequados, como InfluxDB ou Prometheus \cite{influxdb,prometheus}.
+
+O tratamento estatístico incluirá o cálculo da mediana, do desvio padrão e dos percentis de cauda ($p50, p95, p99$) para identificar picos de latência (\emph{tail latency}) que as médias simples ocultariam.
+
+A interpretação dos dados focará na validação de $\mathbf{H}_2$ e $\mathbf{H}_3$, quantificando se o custo computacional adicional (CPU/Memória) do Biscuit é compensado pela economia de recursos de rede (latência/banda) em comparação à introspecção e tráfego externo exigidos por arquiteturas JWT complexas.
+
+Por fim, métricas de engenharia de software, como linhas de código e complexidade ciclomática, serão utilizadas para discutir a ergonomia da solução, complementando a validação de $\mathbf{H}_1$ (viabilidade funcional) demonstrada pela execução bem-sucedida dos cenários de teste.
+
+\chapter{Trabalhos Futuros}
+
+Este trabalho abre diversas frentes para pesquisas subsequentes.
+
+A transposição dos testes do ambiente virtualizado para dispositivos de hardware real pode revelar gargalos de processamento e nuances de hardware que não são observáveis na virtualização. Fundamentalmente, isso possibilitaria a avaliação precisa do consumo energético comparativo entre as soluções de token, uma métrica crítica para dispositivos operados a bateria.
+
+Além do Biscuit, existem outros tokens emergentes com arquiteturas promissoras, como Macaroons e PASETO. Expandir a avaliação comparativa para incluir essas tecnologias ofereceria uma visão mais abrangente das alternativas modernas ao JWT.
+
+Similarmente, o desenvolvimento de módulos de extensão para outros \emph{brokers} MQTT, como EMQX, VerneMQ e NanoMQ, seria de grande valia.
+
+Por fim, uma análise formal de segurança do módulo desenvolvido, incluindo testes de intrusão e verificação formal do código em Rust, seria um passo essencial para validar a robustez da solução.

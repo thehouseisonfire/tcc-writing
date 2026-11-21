@@ -1,0 +1,51 @@
+\chapter{Metodologia}
+
+\section{Abordagem}
+
+A avaliação proposta é predominantemente quantitativa, complementada pela documentação das decisões de implementação.
+
+\begin{itemize}
+  \item $\mathbf{H}_1$: O uso do token Biscuit é funcionalmente viável no ecossistema MQTT, cobrindo a totalidade dos casos de uso de autenticação e autorização que o JWT pode apoiar no broker Mosquitto.
+  \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários onde ambos possuem apoio nativo à funcionalidade (e.g., autenticação de identidade e verificações de integridade).
+  \item $\mathbf{H}_3$: Em cenários de autorização complexos, em que a arquitetura baseada em JWT exige introspecção externa ou consulta a sistemas adicionais, o Biscuit demonstra desempenho superior em termos de latência e vazão.
+\end{itemize}
+
+Variar o tipo de token, a fonte de políticas (ACL estática, Dynamic Security, SQLite local ou serviço HTTP externo), o QoS, a quantidade de conexões simultâneas, o tamanho das mensagens e a complexidade das políticas (incluindo condições de tempo e atributos). Manter constantes hardware, sistema operacional e topologia física.
+
+\subsection{Entidades e Fluxos}
+
+O emissor define as permissões iniciais, o cliente apresenta o token e o módulo decide se o Mosquitto deve permitir a operação. O desenho prevê duas comparações: ambos os formatos como credenciais de identidade com uma fonte de políticas equivalente, e Biscuit com restrições no próprio token diante de um fluxo JWT configurado para consultar políticas externas.
+
+\section{Proposta de Solução}
+
+Módulo em Rust integrado ao Mosquitto 2.0+ via FFI, com \texttt{cbindgen}, \texttt{jsonwebtoken} e \texttt{biscuit\_auth} \cite{rust_jsonwebtoken}. O cliente obterá o token de um emissor externo. A proposta prevê envio no campo \texttt{password} de \texttt{CONNECT}, validação com chave pública previamente configurada e renovação de credenciais por \texttt{AUTH} no MQTT 5.0.
+
+Avaliar a autorização na publicação e na inscrição. A proposta prevê reaproveitar o resultado da verificação criptográfica na sessão e avaliar as regras Datalog no contexto de cada operação. Considerar cache para regras estáticas, condicionado à viabilidade.
+
+\section{Proposta de Ambiente}
+
+Docker 29.0.x, Mosquitto 2.0.x, Rust 1.92.x, \texttt{biscuit\_auth} 6.x, \texttt{jsonwebtoken} 10.x e SQLite 3.51.x. Fixar o broker e os geradores de carga em núcleos físicos distintos. Aferir o canal com \texttt{iperf3} e emular latência, perda e limitação de banda com \texttt{tc}/\texttt{netem}. As opções propostas para carga e topologia são \texttt{mqtt-stresser}, \texttt{emqtt-bench}, Mininet e Containernet \cite{iperf3,mqtt-stresser,emqtt-bench,mininet,containernet}.
+
+\section{Cenários de Teste}
+
+A proposta inclui microbenchmarks, carga integrada de publicação e assinatura, carga sustentada e em rajadas, e falhas. Usar linhas de base sem autenticação, com autenticação nativa e com tokens usados apenas para autenticação de identidade.
+
+\begin{itemize}
+  \item \textbf{MTU:} avaliar o efeito do tamanho do token com MTUs de 200, 500, 1500 e 9000~bytes.
+  \item \textbf{Reconexão simultânea:} reiniciar o broker e medir a recuperação sob reconexão em massa.
+  \item \textbf{Complexidade das políticas:} variar o Biscuit entre 1, 5 e 25 blocos e comparar a avaliação local com o fluxo JWT que consulta serviços externos.
+  \item \textbf{Latência externa:} variar o atraso entre 200~ms e 1~s e a perda entre 1\% e 5\% na rede de gerenciamento.
+  \item \textbf{Contingência:} usar uma política local restritiva no Biscuit quando o serviço externo de autorização estiver indisponível.
+  \item \textbf{Revogação:} comparar lista de revogação com validade de 5, 15 ou 60~min e renovação por \texttt{AUTH}.
+  \item \textbf{Delegação:} um cliente deriva um Biscuit com permissões limitadas à tarefa de outro cliente \cite{identity_management_for_agents}.
+\end{itemize}
+
+\section{Coleta e Análise de Dados}
+
+Medir latências de autenticação e autorização, separando verificação criptográfica de avaliação lógica. Medir também o tempo do \texttt{SYN} do TCP até a primeira publicação efetiva, vazão, CPU, memória, tamanho do token, frequência de consultas externas e carga relativa dos planos de controle e de dados.
+
+Coletar telemetria do módulo e dos clientes, com \texttt{perf} e \texttt{tcpdump}; considerar InfluxDB ou Prometheus para séries temporais \cite{influxdb,prometheus}. Reportar desvio padrão e percentis $p50$, $p95$ e $p99$. Avaliar H$_1$ pelos casos funcionais, H$_2$ pelos cenários equivalentes e H$_3$ pelos cenários que variam a dependência de serviços externos. Linhas de código e complexidade ciclomática foram propostas como medidas complementares de ergonomia.
+
+\chapter{Trabalhos Futuros}
+
+Repetir os experimentos em dispositivos físicos e medir consumo energético; incluir Macaroons e PASETO na comparação; portar a integração para EMQX, VerneMQ ou NanoMQ; e realizar uma avaliação formal de segurança do módulo.

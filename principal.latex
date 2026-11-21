@@ -1,0 +1,9 @@
+\title{Análise da viabilidade do token Biscuit no Broker MQTT Mosquitto}
+      {Analysis of the feasibility of the Biscuit token in the MQTT Broker Mosquitto}
+
+\palavraschave{MQTT, Biscuit, JWT, Segurança, Comparativa}
+              {MQTT, Biscuit, JWT, Security, Benchmark}
+
+\begin{resumo}
+Este trabalho propõe implementar e avaliar um módulo de extensão em Rust para autenticação e autorização com Biscuit e JWT no Mosquitto. A avaliação compara latência, vazão e consumo de recursos para investigar o custo da atenuação e da delegação descentralizadas em redes MQTT.
+\end{resumo}
