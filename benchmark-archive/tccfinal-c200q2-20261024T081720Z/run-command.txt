@@ -1,0 +1,11 @@
+COMPOSE_PROJECT_NAME=docker MQTT_NO_BUILD_IMAGES=1 \
+uv run --locked --group dev python /tmp/opencode/run_q2final.py \
+  --out <evidence>/results \
+  --clients 200 --messages 10 --qos 2 \
+  --scenarios-arg HTTP-LATENCY-1000MS-JWT \
+  --client-topology container-per-client --client-memory 96m \
+  --no-build-images
+
+The wrapper build/token steps were skipped: plugin and token generation were not
+run. The only shim is the loadgen-only image-freeze comparison override needed
+because the temporary baseline-keepalive loadgen is noncanonical.

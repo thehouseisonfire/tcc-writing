@@ -1,0 +1,81 @@
+ Image docker-loadgen Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 519B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile.loadgen
+#2 transferring dockerfile:
+#2 transferring dockerfile: 1.05kB done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#3 DONE 0.0s
+
+#4 [internal] load metadata for docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#4 DONE 0.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 511B done
+#5 DONE 0.0s
+
+#6 [builder 1/7] FROM docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#6 resolve docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d 0.0s done
+#6 DONE 0.0s
+
+#7 [stage-1 1/7] FROM docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#7 resolve docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 0.0s done
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 1.24kB 0.0s done
+#8 DONE 0.0s
+
+#9 [stage-1 5/7] COPY --from=builder /app/target/release/mqtt-auth-client /usr/local/bin/mqtt-auth-client
+#9 CACHED
+
+#10 [builder 5/7] COPY mqtt-auth-biscuit/crates/benchmarks ./crates/benchmarks
+#10 CACHED
+
+#11 [stage-1 2/7] RUN apk add --no-cache ca-certificates ethtool=6.15-r0 iproute2=6.17.0-r0
+#11 CACHED
+
+#12 [builder 7/7] RUN cargo build --release -p gen-tokens --bin mqtt-loadgen --bin mqtt-auth-client
+#12 CACHED
+
+#13 [stage-1 3/7] WORKDIR /workspace
+#13 CACHED
+
+#14 [stage-1 6/7] COPY mqtt-auth-biscuit/docker/loadgen_entrypoint.sh /usr/local/bin/loadgen-entrypoint
+#14 CACHED
+
+#15 [builder 3/7] WORKDIR /app
+#15 CACHED
+
+#16 [builder 6/7] RUN printf '[workspace]\nmembers = ["crates/benchmarks"]\nresolver = "2"\n' > Cargo.toml
+#16 CACHED
+
+#17 [builder 4/7] COPY mqtt-auth-biscuit/Cargo.toml mqtt-auth-biscuit/Cargo.lock ./
+#17 CACHED
+
+#18 [stage-1 4/7] COPY --from=builder /app/target/release/mqtt-loadgen /usr/local/bin/mqtt-loadgen
+#18 CACHED
+
+#19 [builder 2/7] RUN apk add --no-cache musl-dev=1.2.5-r23
+#19 CACHED
+
+#20 [stage-1 7/7] RUN chmod +x /usr/local/bin/loadgen-entrypoint
+#20 CACHED
+
+#21 exporting to image
+#21 exporting layers done
+#21 exporting manifest sha256:f0841e96bf14401464ed76d13e5409056e1e48c6e40e7930a17fc84b65a9ce89 done
+#21 exporting config sha256:b6e44b5b846198b5f3e54905b6dfe9c42eda3871010825779108eed4704e4732 done
+#21 exporting attestation manifest sha256:36057f51e74352a4c53ea8f7c4d92e6d2cb698e4bf3ebade0db16810f6eceede 0.0s done
+#21 exporting manifest list sha256:7b50ea7f50e9557e406d68abc91f867e52d1ec5fda237e3e8d1c8828f190bab4 0.0s done
+#21 naming to docker.io/library/docker-loadgen:latest done
+#21 unpacking to docker.io/library/docker-loadgen:latest done
+#21 DONE 0.1s
+
+#22 resolving provenance for metadata file
+#22 DONE 0.0s
+ Image docker-loadgen Built 

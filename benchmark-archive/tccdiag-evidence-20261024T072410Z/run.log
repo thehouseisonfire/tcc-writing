@@ -1,0 +1,2343 @@
+[04:34:51] INFO     image freeze verified: source commit   run_scenarios.py:8644
+                    2f3222d3a9b802027eac927c458488fbb7afb9                      
+                    08, 10 services                                             
+           INFO     Packet capture enabled using dpkt      run_scenarios.py:8747
+                    parser (version: 1.9.8)                                     
+           INFO     Filter: port 1883 or port 8883,        run_scenarios.py:8752
+                    Duration: 300s                                              
+No stopped containers
+ Network docker_mqtt-net Creating 
+ Network docker_mqtt-net Creating 
+ Network docker_mqtt-net Created 
+ Network docker_mqtt-net Created 
+ Container docker-token-issuer-1 Creating 
+ Container docker-authz-1 Creating 
+ Container docker-mosquitto-1 Creating 
+ Container docker-metrics-collector-1 Creating 
+ Container docker-cadvisor-1 Creating 
+ Container docker-iperf3-1 Creating 
+ Container docker-authz-1 Created 
+ Container docker-iperf3-1 Created 
+ Container docker-mosquitto-1 Created 
+ Container docker-token-issuer-1 Created 
+ Container docker-cadvisor-1 Created 
+ Container docker-metrics-collector-1 Created 
+ Container docker-iperf3-1 Starting 
+ Container docker-mosquitto-1 Starting 
+ Container docker-metrics-collector-1 Starting 
+ Container docker-cadvisor-1 Starting 
+ Container docker-token-issuer-1 Starting 
+ Container docker-authz-1 Starting 
+ Container docker-iperf3-1 Started 
+ Container docker-mosquitto-1 Started 
+ Container docker-metrics-collector-1 Started 
+ Container docker-cadvisor-1 Started 
+ Container docker-token-issuer-1 Started 
+ Container docker-authz-1 Started 
+ Container docker-netem-1 Creating 
+ Container docker-netem-1 Created 
+ Container docker-netem-1 Starting 
+ Container docker-netem-1 Started 
+[04:34:53] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8081/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8082/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=up                 
+                    "HTTP/1.1 200 OK"                                           
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2Af79bec452a5d.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2Af79bec452a5d.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[04:34:55] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2Af79bec452a5d.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2Af79bec452a5d.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[04:34:58] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2Af79bec452a5d.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2Af79bec452a5d.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[04:35:00] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2Af79bec452a5d.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2Af79bec452a5d.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[04:35:02] INFO     Running iperf3 baseline: 4 streams, 5s iperf3_baseline.py:63
+                    duration, reverse=True                                      
+[04:35:07] INFO     iperf3 baseline complete: 72710.19    iperf3_baseline.py:212
+                    Mbps, 0.00 ms RTT                                           
+           INFO     Network baseline: 72710.19 Mbps        run_scenarios.py:9046
+                    capacity confirmed                                          
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8081/config/reset "HTTP/2                  
+                    200 OK"                                                     
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8081/config "HTTP/2 200 OK"                
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8081/stats/reset "HTTP/2                   
+                    200 OK"                                                     
+No stopped containers
+ Container docker-sync-barrier-1 Creating 
+ Container docker-sync-barrier-1 Created 
+ Container docker-sync-barrier-1 Starting 
+ Container docker-sync-barrier-1 Started 
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/health "HTTP/2 200 OK"                
+[04:35:13] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:14] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:15] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:16] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:17] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:18] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:19] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:20] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:21] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:22] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:23] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:24] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:25] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:26] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:27] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:28] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:29] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:30] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:31] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:32] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:33] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:34] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:35] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:36] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:37] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:38] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:39] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:40] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:41] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:42] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:43] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:44] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:45] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:46] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:47] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:48] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:49] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:50] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:51] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:52] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:53] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:54] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:55] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:56] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:57] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:58] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:35:59] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:00] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:01] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:02] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:03] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:04] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:05] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:06] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:07] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:08] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:09] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:10] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:11] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:12] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+[04:36:13] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/status                
+                     "HTTP/2 200 OK"                                            
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342620826-8421bd63/releas                
+                    e?participants=200 "HTTP/2 200 OK"                          
+[04:36:14] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 404 Not Found"                             
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+[04:36:15] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/status "HTTP/2 200 OK"                                    
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8083/runs/http_latency_1000                
+                    ms_jwt-1-1792827307342653490-dab6b73f-publis                
+                    h/release?participants=200 "HTTP/2 200 OK"                  
+[05:09:39] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8081/stats "HTTP/2 200 OK"                 
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+[05:09:40] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=sum%28container_cpu_usage_seconds_total%7                
+                    Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%29&star                
+                    t=1792827305.3421535&end=1792829380.5921535&                
+                    step=0.25 "HTTP/1.1 200 OK"                                 
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28timestamp%28container_cpu_usage_sec                
+                    onds_total%7Bid%3D~%22.%2Af79bec452a5d.%2A%2                
+                    2%7D%29%29&start=1792827305.3421535&end=1792                
+                    829380.5921535&step=0.25 "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28container_memory_working_set_bytes%                
+                    7Bid%3D~%22.%2Af79bec452a5d.%2A%22%7D%29&sta                
+                    rt=1792827305.3421535&end=1792829380.5921535                
+                    &step=0.25 "HTTP/1.1 200 OK"                                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28timestamp%28container_memory_workin                
+                    g_set_bytes%7Bid%3D~%22.%2Af79bec452a5d.%2A%                
+                    22%7D%29%29&start=1792827305.3421535&end=179                
+                    2829380.5921535&step=0.25 "HTTP/1.1 200 OK"                 
+           INFO     Wrote                                  run_scenarios.py:9974
+                    /home/eagle/tccdiag-evidence-20261024T                      
+                    072410Z/results/HTTP-LATENCY-1000MS-JW                      
+                    T.json                                                      
+[05:09:41] INFO     Summary written to                  aggregate_results.py:368
+                    /home/eagle/tccdiag-evidence-202610                         
+                    24T072410Z/results/summary.json                             

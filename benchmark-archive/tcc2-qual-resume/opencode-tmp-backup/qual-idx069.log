@@ -1,0 +1,37 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/run-benchmarks --scenarios TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT-TLS --workload-shape matrix --clients 10 --messages 10 --client-topology container-per-client --client-memory 96m --skip-build --skip-tokens`
+Using docker compose: docker compose
+Skipping build (per --skip-build)
+Skipping token generation (per --skip-tokens)
+Running scenarios...
+[19:44:00] INFO     Packet capture enabled using dpkt      run_scenarios.py:8063
+                    parser (version: 1.9.8)                                     
+           INFO     Filter: port 1883 or port 8883,        run_scenarios.py:8068
+                    Duration: 300s                                              
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /home/eagle/TCC2/mqtt-auth-biscuit/benchmarks/run_scenarios.py:8121 in main  │
+│                                                                              │
+│   8118 │   │   return                                                        │
+│   8119 │                                                                     │
+│   8120 │   for s in scenarios:                                               │
+│ ❱ 8121 │   │   _validate_scenario_credentials(s["id"], s)                    │
+│   8122 │   │   scenario_semantics = _scenario_semantics_metadata(            │
+│   8123 │   │   │   s["id"],                                                  │
+│   8124 │   │   │   s,                                                        │
+│                                                                              │
+│ /home/eagle/TCC2/mqtt-auth-biscuit/benchmarks/run_scenarios.py:5301 in       │
+│ _validate_scenario_credentials                                               │
+│                                                                              │
+│   5298 │   │   │   )                                                         │
+│   5299 │   │   )                                                             │
+│   5300 │   │   if not allowed:                                               │
+│ ❱ 5301 │   │   │   raise ValueError(f"{scenario_id}: shared credential mode  │
+│        is not allowlisted")                                                  │
+│   5302                                                                       │
+│   5303                                                                       │
+│   5304 def _render_mosquitto_runtime_conf(                                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ValueError: TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT-TLS: shared credential mode 
+is not allowlisted
+Cleaning up Docker services...
+command exited with exit status: 1: uv run --locked python -m benchmarks.run_scenarios --scenarios-arg TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT-TLS --workload-shape matrix --clients 10 --messages 10 --client-topology container-per-client --client-memory 96m

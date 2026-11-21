@@ -1,0 +1,11 @@
+CONTAINER ID   IMAGE                            COMMAND                  CREATED       STATUS                     PORTS                                         NAMES
+7bae838dde02   postgres:14.4                    "docker-entrypoint.s…"   2 weeks ago   Exited (128) 2 weeks ago                                                 nos-investimentos-db
+b1513ad38501   ghcr.io/google/cadvisor:0.56.2   "/usr/bin/entrypoint…"   2 weeks ago   Created                                                                  resource-snapshot-1520db4b-cadvisor-1
+9331ee47870a   prom/prometheus:v3.10.0          "/bin/prometheus --c…"   2 weeks ago   Created                                                                  resource-snapshot-1520db4b-metrics-collector-1
+855736534a86   52355323f14c                     "/usr/sbin/mosquitto…"   2 weeks ago   Created                                                                  resource-snapshot-1520db4b-mosquitto-1
+ad10612d565f   prom/prometheus:v3.10.0          "/bin/prometheus --c…"   2 weeks ago   Created                                                                  resource-snapshot-64dc78e6-metrics-collector-1
+838f85b23386   ghcr.io/google/cadvisor:0.56.2   "/usr/bin/entrypoint…"   2 weeks ago   Created                                                                  resource-snapshot-64dc78e6-cadvisor-1
+f4c4e2447293   75dad32dc76d                     "/usr/sbin/mosquitto…"   2 weeks ago   Created                                                                  resource-snapshot-64dc78e6-mosquitto-1
+66429e0a9cc2   prom/prometheus:v3.10.0          "/bin/prometheus --c…"   2 weeks ago   Exited (255) 2 weeks ago   0.0.0.0:9090->9090/tcp, [::]:9090->9090/tcp   resource-snapshot-cd917205-metrics-collector-1
+de6280fbccf7   ghcr.io/google/cadvisor:0.56.2   "/usr/bin/entrypoint…"   2 weeks ago   Created                                                                  resource-snapshot-cd917205-cadvisor-1
+50a8ff5ddb7a   75dad32dc76d                     "/usr/sbin/mosquitto…"   2 weeks ago   Exited (255) 2 weeks ago   0.0.0.0:1883->1883/tcp, [::]:1883->1883/tcp   resource-snapshot-cd917205-mosquitto-1

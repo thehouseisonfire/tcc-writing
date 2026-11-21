@@ -1,0 +1,1356 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
+from benchmarks import run_scenarios as rs
+
+
+class _SelectedScenario(RuntimeError):
+    pass
+
+
+MULTI_CLIENT_FANOUT_PARITY_SCENARIOS = (
+    "HTTP-ACL-READ-FANOUT-STRICT-MED-ALLOW-PARITY-JWT-50",
+    "HTTP-ACL-READ-FANOUT-STRICT-COMPLEX-DENY-PARITY-BISCUIT-10",
+    "HYBRID-ACL-READ-FANOUT-STRICT-MED-ALLOW-PARITY-BISCUIT-100",
+    "HYBRID-ACL-READ-FANOUT-STRICT-SIMPLE-DENY-PARITY-JWT-10",
+)
+
+
+def _placeholder_tokens() -> dict[str, str]:
+    source = Path(rs.__file__).read_text(encoding="utf-8")
+    keys = set(re.findall(r'tokens\["([^"]+)"\]', source))
+    keys.update(re.findall(r'tokens\.get\("([^"]+)"', source))
+    return {key: f"{key}-fixture" for key in keys}
+
+
+def _scenario_registry() -> dict[str, rs.ScenarioConfig]:
+    return rs._build_available_scenarios(
+        _placeholder_tokens(),
+        token_issuer_no_default_roles=False,
+        token_issuer_no_default_grants=False,
+    )
+
+
+def _measured_result(connect_count: int, publish_count: int) -> dict[str, Any]:
+    connect = [1.0] * connect_count
+    publish = [1.0] * publish_count
+    return {
+        "connect": rs._summary_from_values(connect),
+        "publish": rs._summary_from_values(publish),
+        "publish_qos_0": rs._summary_from_values([]),
+        "publish_qos_1": rs._summary_from_values(publish),
+        "publish_qos_2": rs._summary_from_values([]),
+        "raw_metrics": {
+            "connect": connect,
+            "publish": publish,
+            "publish_qos_0": [],
+            "publish_qos_1": publish,
+            "publish_qos_2": [],
+        },
+        "publish_throughput_mps": float(publish_count),
+    }
+
+
+def test_scenario_semantics_metadata_is_present_for_capability_and_mixed_families() -> None:
+    scenarios = _scenario_registry()
+
+    capability_metadata = rs._scenario_semantics_metadata(
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-50",
+        scenarios["TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-50"],
+        default_clients=50,
+    )
+    assert capability_metadata == {
+        "jwt_identity_binding": "off",
+        "biscuit_identity_binding": "off",
+        "semantic_class": "capability",
+    }
+
+    mixed_metadata = rs._scenario_semantics_metadata(
+        "CONTROL-CHURN-CREATE-ROLE-JWT",
+        scenarios["CONTROL-CHURN-CREATE-ROLE-JWT"],
+        default_clients=50,
+    )
+    assert mixed_metadata == {
+        "jwt_identity_binding": "strict",
+        "biscuit_identity_binding": "off",
+        "semantic_class": "mixed",
+    }
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "expected_password"),
+    (
+        ("HTTP-LATENCY-200MS-PARITY-JWT", "jwt_strict_sub_client_id-fixture"),
+        ("HTTP-LATENCY-200MS-PARITY-BISCUIT", "biscuit_strict_client_id-fixture"),
+        ("HTTP-PROFILE-SIMPLE-PARITY-JWT", "jwt_strict_sub_client_id-fixture"),
+        ("HTTP-PROFILE-SIMPLE-PARITY-BISCUIT", "biscuit_strict_client_id-fixture"),
+        ("HTTP-PROFILE-MED-PARITY-JWT", "jwt_strict_sub_client_id-fixture"),
+        ("HTTP-PROFILE-MED-PARITY-BISCUIT", "biscuit_strict_client_id-fixture"),
+        ("HTTP-PROFILE-COMPLEX-PARITY-JWT", "jwt_strict_sub_client_id-fixture"),
+        ("HTTP-PROFILE-COMPLEX-PARITY-BISCUIT", "biscuit_strict_client_id-fixture"),
+    ),
+)
+def test_http_parity_variants_enable_strict_identity_binding_for_both_token_types(
+    scenario_id: str,
+    expected_password: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["client_count"] == 1
+    assert scenario["password"] == expected_password
+    assert rs._scenario_semantics_metadata(
+        scenario_id,
+        scenario,
+        default_clients=50,
+    ) == {
+        "jwt_identity_binding": "strict",
+        "biscuit_identity_binding": "strict",
+        "semantic_class": "parity_identity_bound",
+    }
+
+    if scenario_id.endswith("-JWT"):
+        authz_config = scenario["authz_config"]
+        assert authz_config is not None
+        assert authz_config["jwt_identity_binding"] == "strict"
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "TOKEN-DELEGATION-TEMP-ONLY-BISCUIT",
+        "TOKEN-ATTENUATION-COMBINED-BISCUIT",
+        "TOKEN-COMPOSABILITY-ATTENUATED-DATALOG-MED-BISCUIT",
+        "TOKEN-COMPOSABILITY-DELEGATED-DATALOG-HIGH-BISCUIT",
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-100",
+    ),
+)
+def test_capability_scenarios_keep_identity_binding_disabled(scenario_id: str) -> None:
+    scenarios = _scenario_registry()
+    assert rs._scenario_semantics_metadata(
+        scenario_id,
+        scenarios[scenario_id],
+        default_clients=50,
+    ) == {
+        "jwt_identity_binding": "off",
+        "biscuit_identity_binding": "off",
+        "semantic_class": "capability",
+    }
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind"),
+    (
+        ("TOKEN-THUNDERING-HERD-JWT", "jwt"),
+        ("TOKEN-THUNDERING-HERD-BISCUIT", "biscuit"),
+    ),
+)
+def test_thundering_herd_scenarios_are_synchronized_connect_bursts(
+    scenario_id: str,
+    kind: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["sync_connect"] is True
+    assert scenario["restart_mosquitto"] is True
+    assert scenario["username"] == kind
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "HTTP-LATENCY-200MS-JWT",
+        "HTTP-LATENCY-1000MS-JWT",
+        "HTTP-LATENCY-200MS-BISCUIT",
+        "HTTP-LATENCY-200MS-PARITY-JWT",
+        "HTTP-LATENCY-200MS-PARITY-BISCUIT",
+    ),
+)
+def test_http_latency_scenarios_use_deterministic_connect_barrier(scenario_id: str) -> None:
+    """Latency cells must not let staggered container starts queue CONNECTs.
+
+    With an injected PDP delay and Mosquitto's single-threaded blocking
+    authorization path, a container that publishes early blocks later
+    containers' CONNECTs behind delayed authorizations. The worst-case queue
+    then grows with total staggered work instead of the bounded
+    ``clients * delay`` budget. Requiring the cross-container connect barrier
+    makes connects-before-publishes deterministic for container-per-client.
+    """
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["sync_connect"] is True
+    # Latency cells measure steady-state publish authorizations, not cold
+    # broker starts, so they must not request a broker restart.
+    assert scenario.get("restart_mosquitto") is not True
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "HTTP-LATENCY-200MS-JWT-TLS",
+        "HTTP-LATENCY-1000MS-JWT-TLS",
+        "HTTP-LATENCY-200MS-BISCUIT-TLS",
+        "HTTP-LATENCY-200MS-PARITY-JWT-TLS",
+        "HTTP-LATENCY-200MS-PARITY-BISCUIT-TLS",
+    ),
+)
+def test_http_latency_tls_variants_inherit_connect_barrier(scenario_id: str) -> None:
+    """TLS matrix expansion must preserve the deterministic barrier."""
+    base = _scenario_registry()
+    expanded = rs._expand_tls_matrix(base)
+
+    assert expanded[scenario_id]["sync_connect"] is True
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "HTTP-FAILURE-INJECTION-200MS-1PCT-JWT",
+        "HTTP-FAILURE-INJECTION-200MS-5PCT-JWT",
+    ),
+)
+def test_http_failure_injection_scenarios_use_deterministic_connect_barrier(
+    scenario_id: str,
+) -> None:
+    """Failure-injection cells inject the same PDP delay as latency cells.
+
+    With Mosquitto's single-threaded blocking authorization path, staggered
+    container starts let early publishes queue later CONNECTs behind delayed
+    authorizations, so these cells need the same connects-before-publishes
+    barrier — without declaring http_expected_delay_ms, which would trip the
+    no-failure latency contract.
+    """
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["sync_connect"] is True
+    assert scenario.get("http_expected_delay_ms") is None
+    assert scenario.get("restart_mosquitto") is not True
+    # Narrow HOLD timeout budget: explicit metadata only, producing the
+    # 20 s outer budget at c25 without touching the latency contract.
+    assert scenario.get("http_timeout_budget_delay_ms") == 200
+    assert rs._publish_timeout_seconds(scenario, 25) == 20
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "HTTP-FAILURE-INJECTION-200MS-1PCT-JWT-TLS",
+        "HTTP-FAILURE-INJECTION-200MS-5PCT-JWT-TLS",
+    ),
+)
+def test_http_failure_injection_tls_variants_inherit_connect_barrier(
+    scenario_id: str,
+) -> None:
+    """TLS matrix expansion must preserve the failure-injection barrier."""
+    base = _scenario_registry()
+    expanded = rs._expand_tls_matrix(base)
+
+    assert expanded[scenario_id]["sync_connect"] is True
+    assert expanded[scenario_id].get("http_expected_delay_ms") is None
+    assert expanded[scenario_id].get("http_timeout_budget_delay_ms") == 200
+    assert rs._publish_timeout_seconds(expanded[scenario_id], 25) == 20
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind"),
+    (
+        ("TOKEN-LIFECYCLE-RECONNECT-PUBLISH-JWT", "jwt"),
+        ("TOKEN-LIFECYCLE-RECONNECT-PUBLISH-BISCUIT", "biscuit"),
+    ),
+)
+def test_reconnect_publish_lifecycle_scenarios_are_multi_client_auth_heavy_repeats(
+    scenario_id: str,
+    kind: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["repeat"] == 6
+    assert scenario["sleep_between"] == 1
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 25
+    assert scenario["token_refresh"] == {"kind": kind, "ttl_seconds": 30}
+    assert scenario.get("traffic_pattern") is None
+    assert scenario.get("authz_config") is None
+    assert scenario.get("proactive_refresh") is None
+    assert scenario.get("reauth_storm") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind"),
+    (
+        ("TOKEN-PUBLISH-STRESS-JWT", "jwt"),
+        ("TOKEN-PUBLISH-STRESS-BISCUIT", "biscuit"),
+    ),
+)
+def test_publish_stress_scenarios_are_fixed_high_volume_publish_slices(
+    scenario_id: str,
+    kind: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["username"] == kind
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1000
+    assert scenario["complexity_axis"] == "publish_authz"
+    assert scenario["complexity_level"] == "baseline"
+    assert scenario.get("token_refresh") is None
+    assert scenario.get("traffic_pattern") is None
+    assert scenario.get("authz_config") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind"),
+    (
+        ("TOKEN-PUBLISH-STRESS-RECONNECT-JWT", "jwt"),
+        ("TOKEN-PUBLISH-STRESS-RECONNECT-BISCUIT", "biscuit"),
+    ),
+)
+def test_publish_stress_reconnect_scenarios_are_high_volume_repeated_full_reconnects(
+    scenario_id: str,
+    kind: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["username"] == kind
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1000
+    assert scenario["repeat"] == 6
+    assert scenario["sleep_between"] == 1
+    assert scenario["token_refresh"] == {"kind": kind, "ttl_seconds": 30}
+    assert scenario["complexity_axis"] == "publish_authz_reconnect"
+    assert scenario["complexity_level"] == "baseline"
+    assert scenario.get("traffic_pattern") is None
+    assert scenario.get("authz_config") is None
+    assert scenario.get("proactive_refresh") is None
+    assert scenario.get("reauth_storm") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "level", "profile"),
+    (
+        ("TOKEN-DATALOG-STRESS-LOW-BISCUIT", "low", "biscuit_complex_low"),
+        ("TOKEN-DATALOG-STRESS-MED-BISCUIT", "med", "biscuit_complex_med"),
+        ("TOKEN-DATALOG-STRESS-HIGH-BISCUIT", "high", "biscuit_complex_high"),
+    ),
+)
+def test_datalog_stress_scenarios_are_fixed_high_volume_local_policy_slices(
+    scenario_id: str,
+    level: str,
+    profile: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["username"] == "biscuit"
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1000
+    assert scenario["complexity_axis"] == "datalog"
+    assert scenario["complexity_level"] == level
+    assert scenario["password_map_profile"] == profile
+    assert scenario.get("biscuit_attenuate") is None
+    assert scenario.get("biscuit_delegate") is None
+    assert scenario.get("token_refresh") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "level", "profile"),
+    (
+        (
+            "TOKEN-COMPOSABILITY-ATTENUATED-DATALOG-MED-BISCUIT",
+            "med",
+            "biscuit_complex_med",
+        ),
+        (
+            "TOKEN-COMPOSABILITY-ATTENUATED-DATALOG-HIGH-BISCUIT",
+            "high",
+            "biscuit_complex_high",
+        ),
+    ),
+)
+def test_composability_attenuated_datalog_scenarios_layer_runtime_restrictions(
+    scenario_id: str,
+    level: str,
+    profile: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["username"] == "biscuit"
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1000
+    assert scenario["complexity_axis"] == "datalog"
+    assert scenario["complexity_level"] == level
+    assert scenario["password_map_profile"] == profile
+    assert scenario["biscuit_attenuate"] == {
+        "ttl_seconds": 300,
+        "topic": "sensors/{client_id}/temp",
+        "op": "publish",
+    }
+    assert scenario.get("biscuit_delegate") is None
+    assert scenario.get("token_refresh") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "level", "profile"),
+    (
+        (
+            "TOKEN-COMPOSABILITY-DELEGATED-DATALOG-MED-BISCUIT",
+            "med",
+            "biscuit_complex_med",
+        ),
+        (
+            "TOKEN-COMPOSABILITY-DELEGATED-DATALOG-HIGH-BISCUIT",
+            "high",
+            "biscuit_complex_high",
+        ),
+    ),
+)
+def test_composability_delegated_datalog_scenarios_layer_runtime_delegation(
+    scenario_id: str,
+    level: str,
+    profile: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["username"] == "biscuit"
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1000
+    assert scenario["complexity_axis"] == "datalog"
+    assert scenario["complexity_level"] == level
+    assert scenario["password_map_profile"] == profile
+    assert scenario["biscuit_delegate"] == {
+        "ttl_seconds": 300,
+        "topic": "sensors/{client_id}/temp",
+        "op": "publish",
+        "handoff": {
+            "topic": "delegation/handoff",
+            "token": "biscuit_delegation_handoff-fixture",
+            "qos": 1,
+            "retain": True,
+        },
+    }
+    assert scenario["qos"] == 1
+    assert scenario.get("biscuit_attenuate") is None
+    assert scenario.get("token_refresh") is None
+    assert scenario["attenuation_probe_subscribe_denied"] is True
+
+
+def test_composability_result_requires_transform_and_credential_attestation() -> None:
+    scenario = _scenario_registry()["TOKEN-COMPOSABILITY-DELEGATED-DATALOG-MED-BISCUIT"]
+    scenario["id"] = "TOKEN-COMPOSABILITY-DELEGATED-DATALOG-MED-BISCUIT"
+    result: dict[str, Any] = {
+        **_measured_result(25, 25_000),
+        "errors": [],
+        "publish_qos_1": {"count": 25_000},
+        "delegation": rs._summary_from_values([1.0] * 25),
+        "delegation_len": rs._summary_from_values([1.0] * 25),
+        "delegation_handoff_publish": rs._summary_from_values([1.0] * 25),
+        "authorization_probes": {"successes": 25, "failures": 0},
+        "inputs": {
+            "credential_attestations": {
+                "clients": {
+                    "profile": "biscuit_complex_med",
+                    "validated_credentials": 25,
+                    "semantic": {
+                        "token_kind": "biscuit",
+                        "complexity_axis": "datalog",
+                        "complexity_level": "med",
+                        "biscuit_blocks": 3,
+                        "rules": 6,
+                    },
+                }
+            }
+        },
+    }
+    result["raw_metrics"].update(
+        {
+            "delegation": [1.0] * 25,
+            "delegation_len": [1.0] * 25,
+            "delegation_handoff_publish": [1.0] * 25,
+        }
+    )
+
+    rs._validate_result_contract(scenario, result, message_count=1000, client_count=25)
+
+    result["delegation"] = {"count": 24}
+    with pytest.raises(RuntimeError, match="delegation was applied"):
+        rs._validate_result_contract(scenario, result, message_count=1000, client_count=25)
+
+
+def _issuance_record(client_id: str, fingerprint: str, issued_at: int = 100) -> dict[str, Any]:
+    return {
+        "client_id": client_id,
+        "token_kind": "jwt",
+        "successful_requests": 1,
+        "issued_at": issued_at,
+        "exp": issued_at + 30,
+        "requested_ttl_seconds": 30,
+        "token_sha256": fingerprint,
+    }
+
+
+def test_part2_inventory_is_registered_unique_and_axis_aware() -> None:
+    scenarios = _scenario_registry()
+    rs._validate_part2_sweep_inventory(scenarios)
+    selected = [scenario_id for cohort in rs.PART2_SWEEP_COHORTS.values() for scenario_id in cohort]
+    assert len(selected) == 32
+    assert len(set(selected)) == len(selected)
+    assert scenarios["TOKEN-ISSUER-BASELINE-JWT"]["credential_mode"] == "issuer"
+    assert scenarios["TOKEN-ISSUER-BASELINE-BISCUIT"]["credential_mode"] == "issuer"
+
+
+def test_part2_inventory_rejects_missing_and_misclassified_scenarios() -> None:
+    scenarios = _scenario_registry()
+    missing = dict(scenarios)
+    missing.pop("TOKEN-ATTENUATION-COMBINED-BISCUIT")
+    with pytest.raises(ValueError, match="not registered"):
+        rs._validate_part2_sweep_inventory(missing)
+
+    fixed_matrix = {name: dict(scenario) for name, scenario in scenarios.items()}
+    fixed_matrix["TOKEN-BASELINE-JWT"]["qos"] = 1
+    with pytest.raises(ValueError, match="fixed sweep axis"):
+        rs._validate_part2_sweep_inventory(cast(dict[str, rs.ScenarioConfig], fixed_matrix))
+
+
+@pytest.mark.parametrize("qos", (0, 1, 2))
+def test_result_contract_validates_effective_cli_qos(qos: int) -> None:
+    scenario: rs.ScenarioConfig = {"id": "CLI-QOS", "topic": "test"}
+    expected = 6
+    result: dict[str, Any] = {
+        **_measured_result(2, expected),
+        "errors": [],
+        "qos_distribution_actual": {
+            f"qos_{value}_count": expected if value == qos else 0 for value in range(3)
+        },
+        **{
+            f"publish_qos_{value}": {"count": expected if value == qos else 0} for value in range(3)
+        },
+    }
+    for value in range(3):
+        samples: list[float] = [1.0] * expected if value == qos else []
+        result[f"publish_qos_{value}"] = rs._summary_from_values(samples)
+        raw_metrics = result["raw_metrics"]
+        assert isinstance(raw_metrics, dict)
+        raw_metrics[f"publish_qos_{value}"] = samples
+    rs._validate_result_contract(
+        scenario, result, message_count=3, client_count=2, effective_qos=qos
+    )
+    cast(dict[str, object], result[f"publish_qos_{qos}"])["count"] = 0
+    with pytest.raises(RuntimeError, match=f"publish_qos_{qos} metric count"):
+        rs._validate_result_contract(
+            scenario, result, message_count=3, client_count=2, effective_qos=qos
+        )
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "level"),
+    (
+        ("TOKEN-COMPLEXITY-DATALOG-LOW-BISCUIT", "low"),
+        ("TOKEN-COMPLEXITY-DATALOG-MED-BISCUIT", "med"),
+        ("TOKEN-COMPLEXITY-DATALOG-HIGH-BISCUIT", "high"),
+    ),
+)
+def test_ordinary_datalog_scenarios_have_attested_levels(scenario_id: str, level: str) -> None:
+    assert _scenario_registry()[scenario_id]["complexity_level"] == level
+
+
+def _chain_length_result(
+    scenario: rs.ScenarioConfig,
+    profile: str,
+    depth: int,
+    clients: int,
+    messages: int,
+) -> dict[str, Any]:
+    total = clients * messages
+    return {
+        **_measured_result(clients, total),
+        "errors": [],
+        "publish_outcomes": {
+            "attempted": total,
+            "succeeded": total,
+            "failed": 0,
+            "attempted_by_qos": {"qos_0": 0, "qos_1": total, "qos_2": 0},
+            "failed_by_qos": {"qos_0": 0, "qos_1": 0, "qos_2": 0},
+        },
+        "qos_distribution_actual": {
+            "qos_0_count": 0,
+            "qos_1_count": total,
+            "qos_2_count": 0,
+        },
+        "inputs": {
+            "credential_attestations": {
+                "clients": {
+                    "profile": profile,
+                    "validated_credentials": clients,
+                    "semantic": {
+                        "token_kind": "biscuit",
+                        "complexity_axis": "chain_length",
+                        "complexity_level": scenario["complexity_level"],
+                        "chain_depth": depth,
+                        "biscuit_blocks": depth,
+                    },
+                }
+            }
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "level", "depth", "profile"),
+    (
+        ("TOKEN-COMPLEXITY-CHAIN-1-BISCUIT", "low", 1, "biscuit_chain_1"),
+        ("TOKEN-COMPLEXITY-CHAIN-5-BISCUIT", "med", 5, "biscuit_5"),
+        ("TOKEN-COMPLEXITY-CHAIN-25-BISCUIT", "high", 25, "biscuit_25"),
+    ),
+)
+def test_chain_length_scenarios_attest_their_declared_depth(
+    scenario_id: str, level: str, depth: int, profile: str
+) -> None:
+    scenario = _scenario_registry()[scenario_id]
+    scenario["id"] = scenario_id
+    assert scenario["complexity_axis"] == "chain_length"
+    assert scenario["complexity_level"] == level
+    assert scenario["password_map_profile"] == profile
+    result = _chain_length_result(scenario, profile, depth, clients=2, messages=3)
+    rs._validate_result_contract(scenario, result, message_count=3, client_count=2)
+
+
+def test_chain_length_contract_rejects_wrong_depth() -> None:
+    scenario = _scenario_registry()["TOKEN-COMPLEXITY-CHAIN-1-BISCUIT"]
+    scenario["id"] = "TOKEN-COMPLEXITY-CHAIN-1-BISCUIT"
+    result = _chain_length_result(scenario, "biscuit_chain_1", 25, clients=2, messages=3)
+    with pytest.raises(RuntimeError, match="does not prove chain depth 1"):
+        rs._validate_result_contract(scenario, result, message_count=3, client_count=2)
+
+
+def test_chain_length_contract_rejects_missing_semantic() -> None:
+    scenario = _scenario_registry()["TOKEN-COMPLEXITY-CHAIN-1-BISCUIT"]
+    scenario["id"] = "TOKEN-COMPLEXITY-CHAIN-1-BISCUIT"
+    result = _chain_length_result(scenario, "biscuit_chain_1", 1, clients=2, messages=3)
+    attestation = result["inputs"]["credential_attestations"]["clients"]
+    assert isinstance(attestation, dict)
+    attestation["semantic"] = None
+    with pytest.raises(RuntimeError, match="does not prove chain depth 1"):
+        rs._validate_result_contract(scenario, result, message_count=3, client_count=2)
+
+
+def test_chain_length_contract_rejects_unknown_level() -> None:
+    scenario = dict(_scenario_registry()["TOKEN-COMPLEXITY-CHAIN-5-BISCUIT"])
+    scenario["id"] = "TOKEN-COMPLEXITY-CHAIN-5-BISCUIT"
+    scenario["complexity_level"] = "bogus"
+    result = _chain_length_result(
+        cast("rs.ScenarioConfig", scenario), "biscuit_5", 5, clients=2, messages=3
+    )
+    with pytest.raises(RuntimeError, match="unknown complexity_level"):
+        rs._validate_result_contract(
+            cast("rs.ScenarioConfig", scenario), result, message_count=3, client_count=2
+        )
+
+
+def test_all_chain_length_scenarios_declare_a_known_depth_tier() -> None:
+    scenarios = _scenario_registry()
+    chain = {
+        scenario_id: scenario
+        for scenario_id, scenario in scenarios.items()
+        if scenario.get("complexity_axis") == "chain_length"
+    }
+    assert len(chain) >= 3
+    for scenario_id, scenario in chain.items():
+        assert scenario.get("complexity_level") in rs._CHAIN_LENGTH_DEPTHS, scenario_id
+    expanded = rs._expand_tls_matrix(scenarios)
+    assert expanded["TOKEN-COMPLEXITY-CHAIN-1-BISCUIT-TLS"]["complexity_level"] == "low"
+
+
+def test_chain_1_uses_dedicated_profile_not_generic_biscuit() -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios["TOKEN-COMPLEXITY-CHAIN-1-BISCUIT"]
+    assert scenario["password_map_profile"] == "biscuit_chain_1"
+    expanded = rs._expand_tls_matrix(scenarios)
+    assert (
+        expanded["TOKEN-COMPLEXITY-CHAIN-1-BISCUIT-TLS"]["password_map_profile"]
+        == "biscuit_chain_1"
+    )
+
+
+def test_generic_biscuit_scenarios_are_not_chain_length_experiments() -> None:
+    scenarios = _scenario_registry()
+    generic = {
+        scenario_id: scenario
+        for scenario_id, scenario in scenarios.items()
+        if scenario.get("password_map_profile") == "biscuit"
+    }
+    assert generic, "expected unrelated scenarios to keep the generic biscuit profile"
+    assert "TOKEN-BASELINE-BISCUIT" in generic
+    for scenario_id, scenario in generic.items():
+        assert scenario.get("complexity_axis") != "chain_length", scenario_id
+        assert scenario.get("password_map_profile") != "biscuit_chain_1", scenario_id
+
+
+def test_chain_1_mapping_survives_identical_baseline_bytes() -> None:
+    # Real tokens.json emits identical bytes for `biscuit` and
+    # `biscuit_chain_1`; the split must come from the scenario, not from
+    # password equality.
+    tokens = _placeholder_tokens()
+    tokens["biscuit_chain_1"] = tokens["biscuit"]
+    scenarios = rs._build_available_scenarios(
+        tokens,
+        token_issuer_no_default_roles=False,
+        token_issuer_no_default_grants=False,
+    )
+    assert scenarios["TOKEN-COMPLEXITY-CHAIN-1-BISCUIT"]["password_map_profile"] == (
+        "biscuit_chain_1"
+    )
+    assert scenarios["TOKEN-BASELINE-BISCUIT"]["password_map_profile"] == "biscuit"
+    generic = [
+        scenario_id
+        for scenario_id, scenario in scenarios.items()
+        if scenario.get("password_map_profile") == "biscuit"
+    ]
+    assert generic
+    assert not [
+        scenario_id
+        for scenario_id, scenario in scenarios.items()
+        if scenario.get("password_map_profile") == "biscuit"
+        and scenario.get("complexity_axis") == "chain_length"
+    ]
+
+
+def test_reconnect_contract_requires_issuer_and_broker_attestations() -> None:
+    scenario = _scenario_registry()["TOKEN-PUBLISH-STRESS-RECONNECT-JWT"]
+    scenario["id"] = "TOKEN-PUBLISH-STRESS-RECONNECT-JWT"
+    records = [_issuance_record(f"client_{index}", f"{index:064x}") for index in range(1, 26)]
+    result = {
+        **_measured_result(25, 25_000),
+        "errors": [],
+        "publish_qos_1": {"count": 25_000},
+        "credential_issuance": records,
+        "broker_auth_delta": {
+            "attempts": 25,
+            "successes": 25,
+            "failures": 0,
+            "jwt_validations": 25,
+            "biscuit_validations": 0,
+            "cache_hits": 24_000,
+            "cache_misses": 1_000,
+        },
+    }
+    rs._validate_result_contract(scenario, result, message_count=1000, client_count=25)
+
+    result["credential_issuance"] = records[:-1]
+    with pytest.raises(RuntimeError, match="credential attestations"):
+        rs._validate_result_contract(scenario, result, message_count=1000, client_count=25)
+
+
+def test_reconnect_freshness_rejects_reused_token() -> None:
+    scenario = _scenario_registry()["TOKEN-PUBLISH-STRESS-RECONNECT-JWT"]
+    scenario["id"] = "TOKEN-PUBLISH-STRESS-RECONNECT-JWT"
+    runs = []
+    for repetition in range(6):
+        records = [
+            _issuance_record(
+                f"client_{index}",
+                f"{repetition * 100 + index:064x}",
+                issued_at=100 + repetition,
+            )
+            for index in range(1, 26)
+        ]
+        runs.append({"loadgen": {"credential_issuance": records}})
+    summary = rs._validate_credential_freshness(scenario, runs, client_count=25)
+    assert summary["successful_issuer_requests"] == 150
+
+    runs[-1]["loadgen"]["credential_issuance"][0]["token_sha256"] = runs[0]["loadgen"][
+        "credential_issuance"
+    ][0]["token_sha256"]
+    with pytest.raises(RuntimeError, match="reused or out-of-order credential"):
+        rs._validate_credential_freshness(scenario, runs, client_count=25)
+
+
+def test_fanout_credential_attestations_validate_distinct_role_profiles() -> None:
+    scenario = _scenario_registry()["STATIC-ACL-FANOUT-JWT"]
+    scenario["id"] = "STATIC-ACL-FANOUT-JWT"
+    scenario["credential_mode"] = "per_client"
+    scenario["password_map_profile"] = "subscriber-profile"
+    scenario["fanout_publisher_password_map_profile"] = "publisher-profile"
+    result: dict[str, Any] = {
+        "inputs": {
+            "credential_attestations": {
+                "clients": {
+                    "profile": "subscriber-profile",
+                    "semantic": None,
+                    "validated_credentials": 10,
+                },
+                "fanout_publisher": {
+                    "profile": "publisher-profile",
+                    "semantic": None,
+                    "validated_credentials": 1,
+                },
+            }
+        }
+    }
+
+    rs._validate_credential_attestations(scenario, result, client_count=10)
+
+    result["inputs"]["credential_attestations"]["fanout_publisher"]["profile"] = (
+        "subscriber-profile"
+    )
+    with pytest.raises(RuntimeError, match="fanout_publisher credential attestation"):
+        rs._validate_credential_attestations(scenario, result, client_count=10)
+
+    del result["inputs"]["credential_attestations"]["fanout_publisher"]
+    with pytest.raises(RuntimeError, match="credential attestation roles"):
+        rs._validate_credential_attestations(scenario, result, client_count=10)
+
+
+def test_http_complexity_result_requires_every_publish_to_use_selected_profile() -> None:
+    scenario = _scenario_registry()["HTTP-AUTHZ-COMPLEXITY-SIMPLE-JWT"]
+    scenario["id"] = "HTTP-AUTHZ-COMPLEXITY-SIMPLE-JWT"
+    result: dict[str, Any] = {
+        **_measured_result(25, 25_000),
+        "errors": [],
+        "inputs": {
+            "credential_attestations": {
+                "clients": {
+                    "profile": "jwt",
+                    "semantic": None,
+                    "validated_credentials": 25,
+                }
+            }
+        },
+        "authz_stats": {
+            "requests": 25_000,
+            "policy_allows": 25_000,
+            "policy_denies": 0,
+            "injected_failures": 0,
+            "rules_examined": 50_000,
+            "profile_requests": {"simple": 25_000},
+        },
+    }
+
+    rs._validate_result_contract(scenario, result, message_count=1000, client_count=25)
+    assert result["authz_stats"]["rules_examined_per_request"] == 2
+
+    result["authz_stats"]["requests"] = 1
+    with pytest.raises(RuntimeError, match="HTTP profile contract failed"):
+        rs._validate_result_contract(scenario, result, message_count=1000, client_count=25)
+
+
+def test_legacy_dynamic_security_read_churn_id_is_not_registered() -> None:
+    assert "DYNAMIC-SECURITY-READ-FANOUT-CHURN" not in _scenario_registry()
+
+
+def test_workload_shape_preserves_each_unspecified_matrix_axis() -> None:
+    scenarios = _scenario_registry()
+    assert rs._scenario_workload_shape(scenarios["TOKEN-PUBLISH-STRESS-JWT"]) == "fixed"
+    assert rs._scenario_workload_shape(scenarios["TOKEN-BASELINE-JWT"]) == "matrix"
+    assert (
+        rs._scenario_workload_shape(scenarios["DYNAMIC-SECURITY-ACL-READ-FANOUT-CHURN-JWT-10"])
+        == "fixed-clients"
+    )
+    assert rs._scenario_workload_shape({"message_count": 25}) == "fixed-messages"
+    mqtt5 = scenarios["TOKEN-MQTT5-REAUTH-JWT"]
+    assert rs._scenario_workload_shape(mqtt5) == "fixed"
+    assert mqtt5["client_count"] == 1
+    assert mqtt5["message_count"] == 2
+    assert mqtt5["qos"] == 1
+    assert mqtt5["workload_kind"] == "mqtt5_reauth_transition"
+    assert mqtt5["authorization_probe_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("scenario", "shape", "axes"),
+    (
+        ({}, "matrix", {"clients": "cli", "messages": "cli"}),
+        ({"client_count": 10}, "fixed-clients", {"clients": "scenario", "messages": "cli"}),
+        (
+            {"subscriber_count": 10},
+            "fixed-clients",
+            {"clients": "scenario", "messages": "cli"},
+        ),
+        ({"message_count": 25}, "fixed-messages", {"clients": "cli", "messages": "scenario"}),
+        (
+            {"client_count": 10, "message_count": 25},
+            "fixed",
+            {"clients": "scenario", "messages": "scenario"},
+        ),
+    ),
+)
+def test_workload_shape_and_axes_are_independent(
+    scenario: rs.ScenarioConfig,
+    shape: rs.WorkloadShape,
+    axes: dict[str, str],
+) -> None:
+    assert rs._scenario_workload_shape(scenario) == shape
+    assert rs._scenario_workload_axes(scenario) == axes
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind", "level"),
+    (
+        ("HTTP-AUTHZ-COMPLEXITY-SIMPLE-JWT", "jwt", "simple"),
+        ("HTTP-AUTHZ-COMPLEXITY-MED-JWT", "jwt", "med"),
+        ("HTTP-AUTHZ-COMPLEXITY-COMPLEX-JWT", "jwt", "complex"),
+        ("HTTP-AUTHZ-COMPLEXITY-SIMPLE-BISCUIT", "biscuit", "simple"),
+        ("HTTP-AUTHZ-COMPLEXITY-MED-BISCUIT", "biscuit", "med"),
+        ("HTTP-AUTHZ-COMPLEXITY-COMPLEX-BISCUIT", "biscuit", "complex"),
+    ),
+)
+def test_http_authz_complexity_scenarios_are_fixed_high_volume_profile_runs(
+    scenario_id: str,
+    kind: str,
+    level: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["mosquitto_conf"] == "./mosquitto_http.conf"
+    assert scenario["username"] == kind
+    assert scenario["topic"] == "sensors/{client_id}/temp"
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1000
+    assert scenario["complexity_axis"] == "http_profile"
+    assert scenario["complexity_level"] == level
+    authz_config = scenario["authz_config"]
+    assert authz_config is not None
+    assert authz_config["authz_profile"] == level
+    assert scenario.get("token_refresh") is None
+    assert scenario.get("traffic_pattern") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind"),
+    (
+        ("TOKEN-LIFECYCLE-PROACTIVE-REAUTH-JWT", "jwt"),
+        ("TOKEN-LIFECYCLE-PROACTIVE-REAUTH-BISCUIT", "biscuit"),
+    ),
+)
+def test_proactive_reauth_lifecycle_scenarios_are_timer_driven(scenario_id: str, kind: str) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["proactive_refresh"] is True
+    assert scenario["proactive_refresh_margin_seconds"] == 60
+    assert scenario["proactive_refresh_assert_continuity"] is True
+    assert scenario["token_refresh"] == {"kind": kind, "ttl_seconds": 75}
+    assert scenario["client_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "kind"),
+    (
+        ("TOKEN-LIFECYCLE-REAUTH-STORM-JWT", "jwt"),
+        ("TOKEN-LIFECYCLE-REAUTH-STORM-BISCUIT", "biscuit"),
+    ),
+)
+def test_reauth_storm_lifecycle_scenarios_are_focused_multi_client_slice(
+    scenario_id: str,
+    kind: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["reauth_storm"] is True
+    assert scenario["proactive_refresh"] is True
+    assert scenario["proactive_refresh_margin_seconds"] == 60
+    assert scenario["proactive_refresh_assert_continuity"] is True
+    assert scenario["token_refresh"] == {"kind": kind, "ttl_seconds": 75}
+    assert scenario["client_count"] == 25
+    assert scenario["message_count"] == 1
+    assert scenario.get("traffic_pattern") is None
+    assert scenario.get("authz_config") is None
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "username"),
+    (
+        ("TEST-STRICT-MULTI-CLIENT-JWT", "jwt"),
+        ("TEST-STRICT-MULTI-CLIENT-BISCUIT", "biscuit"),
+    ),
+)
+def test_multi_client_strict_scenarios_validate_when_per_client_provisioning_is_available(
+    scenario_id: str,
+    username: str,
+) -> None:
+    scenario: rs.ScenarioConfig = {
+        "id": scenario_id,
+        "username": username,
+        "password": "shared-token",
+        "topic": "sensors/{client_id}/temp",
+        "client_count": 10,
+        "jwt_identity_binding": "strict",
+        "biscuit_identity_binding": "strict",
+        "semantic_class": "parity_identity_bound",
+    }
+
+    assert rs._scenario_semantics_metadata(
+        scenario_id,
+        scenario,
+        default_clients=50,
+    ) == {
+        "jwt_identity_binding": "strict",
+        "biscuit_identity_binding": "strict",
+        "semantic_class": "parity_identity_bound",
+    }
+
+
+def test_multi_client_strict_scenarios_fail_when_harness_cannot_determine_token_kind() -> None:
+    scenario: rs.ScenarioConfig = {
+        "id": "TEST-STRICT-MULTI-CLIENT-UNKNOWN",
+        "password": "shared-token",
+        "topic": "sensors/{client_id}/temp",
+        "client_count": 10,
+        "jwt_identity_binding": "strict",
+        "biscuit_identity_binding": "strict",
+        "semantic_class": "parity_identity_bound",
+    }
+
+    with pytest.raises(ValueError, match="cannot determine how to provision"):
+        rs._validate_scenario_semantics(
+            scenario["id"],
+            scenario,
+            default_clients=50,
+        )
+
+
+def test_multi_client_capability_scenarios_may_reuse_shared_tokens_when_declared() -> None:
+    scenario: rs.ScenarioConfig = {
+        "id": "TEST-CAPABILITY-SHARED-TOKEN-JWT",
+        "username": "jwt",
+        "password": "shared-token",
+        "topic": "fanout/broadcast",
+        "traffic_pattern": "fanout",
+        "subscriber_count": 50,
+        "jwt_identity_binding": "off",
+        "biscuit_identity_binding": "off",
+        "semantic_class": "capability",
+    }
+
+    assert rs._scenario_semantics_metadata(
+        scenario["id"],
+        scenario,
+        default_clients=50,
+    ) == {
+        "jwt_identity_binding": "off",
+        "biscuit_identity_binding": "off",
+        "semantic_class": "capability",
+    }
+
+
+def test_every_scenario_declares_and_validates_credential_mode() -> None:
+    scenarios = _scenario_registry()
+
+    for scenario_id, scenario in scenarios.items():
+        rs._validate_scenario_credentials(scenario_id, scenario)
+
+    # TLS variants inherit base credential semantics, so shared-credential
+    # families must validate under their -TLS IDs as well.
+    expanded = rs._expand_tls_matrix(scenarios)
+    for scenario_id, scenario in expanded.items():
+        rs._validate_scenario_credentials(scenario_id, scenario)
+    assert expanded["TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT-TLS"]["credential_mode"] == "shared"
+
+    assert scenarios["TOKEN-BASELINE-JWT"]["password_map_profile"] == "jwt"
+    assert scenarios["TOKEN-DENY-READ-JWT"]["credential_mode"] == "shared"
+    assert scenarios["TOKEN-COMPLEXITY-CHAIN-25-BISCUIT"]["password_map_profile"] == "biscuit_25"
+    assert scenarios["STATIC-ACL-FANOUT-JWT"]["password_map_profile"] == "jwt_static_reader"
+    assert (
+        scenarios["STATIC-ACL-FANOUT-JWT"]["fanout_publisher_password_map_profile"]
+        == "jwt_static_writer"
+    )
+    assert scenarios["TOKEN-THUNDERING-HERD-JWT"]["credential_mode"] == "per_client"
+    assert scenarios["TOKEN-LIFECYCLE-REAUTH-STORM-BISCUIT"]["credential_mode"] == "issuer"
+    assert scenarios["TOKEN-LIFECYCLE-RECONNECT-PUBLISH-JWT"]["credential_mode"] == "issuer"
+    assert scenarios["TOKEN-LIFECYCLE-RECONNECT-PUBLISH-BISCUIT"]["credential_mode"] == "issuer"
+    assert scenarios["TOKEN-PUBLISH-STRESS-JWT"]["credential_mode"] == "per_client"
+    assert scenarios["TOKEN-PUBLISH-STRESS-BISCUIT"]["credential_mode"] == "per_client"
+    assert scenarios["TOKEN-PUBLISH-STRESS-RECONNECT-JWT"]["credential_mode"] == "issuer"
+    assert scenarios["TOKEN-PUBLISH-STRESS-RECONNECT-BISCUIT"]["credential_mode"] == "issuer"
+    assert scenarios["TOKEN-DATALOG-STRESS-LOW-BISCUIT"]["credential_mode"] == "per_client"
+    assert (
+        scenarios["TOKEN-COMPOSABILITY-ATTENUATED-DATALOG-MED-BISCUIT"]["credential_mode"]
+        == "per_client"
+    )
+
+    assert (
+        scenarios["TOKEN-COMPOSABILITY-DELEGATED-DATALOG-HIGH-BISCUIT"]["credential_mode"]
+        == "per_client"
+    )
+    assert scenarios["HTTP-AUTHZ-COMPLEXITY-SIMPLE-JWT"]["credential_mode"] == "per_client"
+    assert scenarios["HTTP-AUTHZ-COMPLEXITY-COMPLEX-BISCUIT"]["credential_mode"] == "per_client"
+    assert scenarios["TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT"]["credential_mode"] == "shared"
+    assert scenarios["TOKEN-ACL-READ-FANOUT-STRICT-ALLOW-JWT-50"]["credential_mode"] == "shared"
+    assert (
+        scenarios["HTTP-ACL-READ-FANOUT-STRICT-MED-ALLOW-PARITY-JWT-50"]["password_map_profile"]
+        == "jwt_fanout_strict"
+    )
+    assert (
+        scenarios["HTTP-LATENCY-200MS-PARITY-BISCUIT"]["password_map_profile"]
+        == "biscuit_strict_client_id"
+    )
+
+
+def test_phase_one_deny_and_attenuation_scenarios_have_executable_contracts() -> None:
+    scenarios = _scenario_registry()
+    for scenario_id in ("TOKEN-DENY-READ-JWT", "TOKEN-ATTENUATED-DENY-BISCUIT"):
+        scenario = scenarios[scenario_id]
+        assert scenario["traffic_pattern"] == "fanout"
+        assert scenario["acl_read_enforcement"] == "strict"
+        assert scenario["delivery_contract"] == {"steady": "none"}
+        assert scenario["fanout_publisher_password"] != scenario["password"]
+
+    attenuation = scenarios["TOKEN-ATTENUATION-COMBINED-BISCUIT"]["biscuit_attenuate"]
+    assert attenuation["denies"] == ["subscribe:sensors/{client_id}/temp"]
+    assert attenuation["checks"] == ['resource("sensors/{client_id}/temp")']
+    assert "op" not in attenuation
+
+
+@pytest.mark.parametrize("scenario_id", MULTI_CLIENT_FANOUT_PARITY_SCENARIOS)
+def test_multi_client_fanout_parity_variants_are_runnable_and_strict(
+    scenario_id: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["password"] == ""
+    assert scenario.get("fanout_publisher_password") == ""
+    assert rs._scenario_semantics_metadata(
+        scenario_id,
+        scenario,
+        default_clients=50,
+    ) == {
+        "jwt_identity_binding": "strict",
+        "biscuit_identity_binding": "strict",
+        "semantic_class": "parity_identity_bound",
+    }
+
+
+def test_multi_client_fanout_parity_variants_do_not_depend_on_strict_fixture_tokens() -> None:
+    tokens = _placeholder_tokens()
+    tokens.pop("jwt_strict_sub_client_id", None)
+    tokens.pop("biscuit_strict_client_id", None)
+
+    scenarios = rs._build_available_scenarios(
+        tokens,
+        token_issuer_no_default_roles=False,
+        token_issuer_no_default_grants=False,
+    )
+
+    assert "HTTP-LATENCY-200MS-PARITY-JWT" not in scenarios
+    assert "HTTP-LATENCY-200MS-PARITY-BISCUIT" not in scenarios
+    assert "HTTP-ACL-READ-FANOUT-STRICT-MED-ALLOW-PARITY-JWT-50" in scenarios
+    assert "HYBRID-ACL-READ-FANOUT-STRICT-SIMPLE-DENY-PARITY-BISCUIT-10" in scenarios
+
+
+def test_token_acl_read_fanout_strict_scenarios_do_not_register_parity_variants() -> None:
+    scenarios = _scenario_registry()
+
+    assert "TOKEN-ACL-READ-FANOUT-STRICT-ALLOW-PARITY-JWT-50" not in scenarios
+    assert "TOKEN-ACL-READ-FANOUT-STRICT-ALLOW-PARITY-BISCUIT-50" not in scenarios
+    assert "TOKEN-ACL-READ-FANOUT-STRICT-DENY-PARITY-JWT-10" not in scenarios
+    assert "TOKEN-ACL-READ-FANOUT-STRICT-DENY-PARITY-BISCUIT-10" not in scenarios
+
+
+def test_multi_client_http_hybrid_jwt_parity_variants_enable_strict_authz_binding() -> None:
+    scenarios = _scenario_registry()
+
+    for scenario_id in (
+        "HTTP-ACL-READ-FANOUT-STRICT-MED-ALLOW-PARITY-JWT-50",
+        "HYBRID-ACL-READ-FANOUT-STRICT-SIMPLE-DENY-PARITY-JWT-10",
+    ):
+        authz_config = scenarios[scenario_id]["authz_config"]
+        assert authz_config is not None
+        assert authz_config["jwt_identity_binding"] == "strict"
+
+
+def test_requested_http_hybrid_multi_client_parity_scenarios_do_not_require_strict_fixture_tokens() -> (  # noqa: E501
+    None
+):
+    tokens = _placeholder_tokens()
+    tokens.pop("jwt_strict_sub_client_id", None)
+    tokens.pop("biscuit_strict_client_id", None)
+
+    rs._require_requested_scenario_fixtures(
+        "HTTP-ACL-READ-FANOUT-STRICT-MED-ALLOW-PARITY-JWT-50",
+        tokens,
+    )
+
+
+def test_legacy_token_fixtures_do_not_register_parity_scenarios() -> None:
+    legacy_tokens = _placeholder_tokens()
+    legacy_tokens.pop("jwt_strict_sub_client_id", None)
+    legacy_tokens.pop("biscuit_strict_client_id", None)
+
+    scenarios = rs._build_available_scenarios(
+        legacy_tokens,
+        token_issuer_no_default_roles=False,
+        token_issuer_no_default_grants=False,
+    )
+
+    assert "HTTP-LATENCY-200MS-PARITY-JWT" not in scenarios
+    assert "HTTP-LATENCY-200MS-PARITY-BISCUIT" not in scenarios
+    assert "HTTP-PROFILE-COMPLEX-PARITY-JWT" not in scenarios
+    assert "HTTP-PROFILE-COMPLEX-PARITY-BISCUIT" not in scenarios
+
+
+def test_partial_jwt_strict_fixture_registers_only_jwt_parity_scenarios() -> None:
+    tokens = _placeholder_tokens()
+    tokens.pop("biscuit_strict_client_id", None)
+
+    scenarios = rs._build_available_scenarios(
+        tokens,
+        token_issuer_no_default_roles=False,
+        token_issuer_no_default_grants=False,
+    )
+
+    assert "HTTP-LATENCY-200MS-PARITY-JWT" in scenarios
+    assert "HTTP-PROFILE-COMPLEX-PARITY-JWT" in scenarios
+    assert "HTTP-LATENCY-200MS-PARITY-BISCUIT" not in scenarios
+    assert "HTTP-PROFILE-COMPLEX-PARITY-BISCUIT" not in scenarios
+
+
+def test_partial_biscuit_strict_fixture_registers_only_biscuit_parity_scenarios() -> None:
+    tokens = _placeholder_tokens()
+    tokens.pop("jwt_strict_sub_client_id", None)
+
+    scenarios = rs._build_available_scenarios(
+        tokens,
+        token_issuer_no_default_roles=False,
+        token_issuer_no_default_grants=False,
+    )
+
+    assert "HTTP-LATENCY-200MS-PARITY-BISCUIT" in scenarios
+    assert "HTTP-PROFILE-COMPLEX-PARITY-BISCUIT" in scenarios
+    assert "HTTP-LATENCY-200MS-PARITY-JWT" not in scenarios
+    assert "HTTP-PROFILE-COMPLEX-PARITY-JWT" not in scenarios
+
+
+def test_requested_partial_fixture_parity_scenario_is_selectable(monkeypatch) -> None:
+    monkeypatch.delenv(rs.NO_BUILD_IMAGES_ENVVAR, raising=False)
+    tokens = _placeholder_tokens()
+    tokens.pop("biscuit_strict_client_id", None)
+    warnings: list[str] = []
+
+    class _FakeLogger:
+        def info(self, _msg: str, *args: object) -> None:
+            return None
+
+        def warning(self, msg: str, *args: object) -> None:
+            warnings.append(msg % args if args else msg)
+
+    def _fake_effective_mosquitto_runtime_conf(
+        mosquitto_conf: str,
+        *,
+        jwt_identity_binding: rs.IdentityBindingMode,
+        biscuit_identity_binding: rs.IdentityBindingMode,
+        biscuit_client_id_fact: str,
+        cache_ttl_seconds: int | None = None,
+    ) -> str:
+        assert mosquitto_conf == "./mosquitto_http.conf"
+        assert jwt_identity_binding == "strict"
+        assert biscuit_identity_binding == "strict"
+        assert biscuit_client_id_fact == "client_id"
+        assert cache_ttl_seconds is None
+        raise _SelectedScenario
+
+    monkeypatch.setattr(rs, "setup_logging", lambda _log_level: None)
+    monkeypatch.setattr(rs, "_read_tokens", lambda _path: tokens)
+    monkeypatch.setattr(
+        rs,
+        "_effective_mosquitto_runtime_conf",
+        _fake_effective_mosquitto_runtime_conf,
+    )
+    monkeypatch.setattr(rs, "logger", _FakeLogger())
+
+    with pytest.raises(_SelectedScenario):
+        rs.main(
+            tokens_path="ignored.json",
+            scenarios_arg="HTTP-LATENCY-200MS-PARITY-JWT",
+            iperf3_enabled=False,
+            tcpdump_enabled=False,
+        )
+
+    assert "Unknown scenario 'HTTP-LATENCY-200MS-PARITY-JWT', skipping" not in warnings
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "token_key", "subscribers"),
+    (
+        ("TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-10", "jwt_fanout_allow", 10),
+        ("TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-50", "jwt_fanout_allow", 50),
+        ("TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-100", "jwt_fanout_allow", 100),
+        ("TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-10", "biscuit_fanout_allow", 10),
+        ("TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-50", "biscuit_fanout_allow", 50),
+        ("TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-100", "biscuit_fanout_allow", 100),
+    ),
+)
+def test_token_acl_read_fanout_expiry_only_uses_fanout_authorized_credentials(
+    scenario_id: str,
+    token_key: str,
+    subscribers: int,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert scenario["password"] == f"{token_key}-fixture"
+    assert scenario["fanout_publisher_password"] == f"{token_key}-fixture"
+    assert scenario["subscriber_count"] == subscribers
+    assert scenario["topic"] == "fanout/broadcast"
+    assert scenario["fanout_topic"] == "fanout/broadcast"
+    assert scenario["mosquitto_conf"] == "./mosquitto.conf"
+
+
+@pytest.mark.parametrize(
+    "scenario_id",
+    (
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-10",
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-50",
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-JWT-100",
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-10",
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-50",
+        "TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-100",
+    ),
+)
+def test_token_acl_read_fanout_expiry_only_retains_expiry_only_semantics(
+    scenario_id: str,
+) -> None:
+    scenarios = _scenario_registry()
+    scenario = scenarios[scenario_id]
+
+    assert rs._infer_acl_read_enforcement(scenario) == "expiry_only"
+    assert scenario["delivery_contract"] == {"steady": "all"}
+    assert rs._scenario_workload_shape(scenario) == "fixed-clients"
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "missing_key"),
+    (
+        ("HTTP-LATENCY-200MS-PARITY-JWT", "jwt_strict_sub_client_id"),
+        ("HTTP-LATENCY-200MS-PARITY-BISCUIT", "biscuit_strict_client_id"),
+    ),
+)
+def test_requested_parity_scenarios_require_strict_token_fixtures(
+    scenario_id: str,
+    missing_key: str,
+) -> None:
+    tokens = _placeholder_tokens()
+    tokens.pop(missing_key, None)
+
+    with pytest.raises(SystemExit, match=missing_key):
+        rs._require_requested_scenario_fixtures(scenario_id, tokens)

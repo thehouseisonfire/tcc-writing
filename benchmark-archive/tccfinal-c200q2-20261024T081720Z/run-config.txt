@@ -1,0 +1,5 @@
+barrier_seconds 120
+publish_timeout 415
+keepalive 215
+loadgen_freeze_probe sha256:23f49664c8550d20a6585b0693772ebe265d457c234d8fa17a71640b36a87167
+loadgen_actual sha256:02feb19056fb41106f0c8425e4dfe146b9902503569964020169570f772afa13

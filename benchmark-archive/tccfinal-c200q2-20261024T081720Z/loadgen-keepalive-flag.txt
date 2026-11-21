@@ -1,0 +1,1 @@
+      --keepalive-seconds <KEEPALIVE_SECONDS>                                                            MQTT keepalive interval. The runner raises this for HTTP-LATENCY workloads whose serialized authorization round exceeds the default 60 s, so the generic connection-liveness watchdog does not preempt healthy queued work [env: MQTT_KEEPALIVE_SECONDS=] [default: 60]

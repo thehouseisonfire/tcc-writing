@@ -1,0 +1,2539 @@
+use super::*;
+use crate::config::{BiscuitAuthorizerProfile, IdentityBindingMode};
+use crate::jwt_handler::Claims;
+use biscuit_auth::{Biscuit, KeyPair, PrivateKey};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use std::ffi::CString;
+use std::fs;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+static TEST_DYNSEC_COUNTER: AtomicU64 = AtomicU64::new(0);
+const TEST_JWT_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAQEBAQEBAQEBAQEB\n\
+AQEBAQEBAQEBAQEBAQEBAQEBAQGhRANCAARv8DuUkkHOHa3UNRnmlg4KhbQaaaBc\n\
+MoEDqivOFZTKFjxPdTpVvwHcU/bAsMfu54tAxv99JaluIoK5ic73HBRK\n\
+-----END PRIVATE KEY-----\n";
+
+fn read_diagnostic_snapshot() -> serde_json::Value {
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", BENCHMARK_DIAGNOSTICS_PORT))
+        .expect("diagnostics server should accept connections");
+    std::io::Write::write_all(&mut stream, b"snapshot\n").expect("snapshot command should write");
+    let mut response = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(stream), &mut response)
+        .expect("snapshot response should read");
+    serde_json::from_str(&response).expect("snapshot response should be JSON")
+}
+
+#[test]
+fn benchmark_diagnostics_snapshots_advance_between_runs() {
+    let auth = Arc::new(AuthMetrics::default());
+    let authz = Arc::new(AuthzMetrics::default());
+    let cache = Arc::new(SessionCache::new(10));
+    let _server = BenchmarkDiagnosticsServer::start(
+        Arc::clone(&auth),
+        Arc::clone(&authz),
+        Arc::clone(&cache),
+        PolicyMode::TokenOnly,
+    )
+    .expect("diagnostics server should start");
+
+    let before = read_diagnostic_snapshot();
+    auth.attempts.fetch_add(2, Ordering::Relaxed);
+    auth.successes.fetch_add(2, Ordering::Relaxed);
+    auth.jwt_validations.fetch_add(2, Ordering::Relaxed);
+    authz.checks.fetch_add(20, Ordering::Relaxed);
+    authz.allows.fetch_add(20, Ordering::Relaxed);
+    assert!(cache.get(&"missing".to_string()).is_none());
+    let after_first_run = read_diagnostic_snapshot();
+    auth.attempts.fetch_add(2, Ordering::Relaxed);
+    auth.successes.fetch_add(2, Ordering::Relaxed);
+    auth.jwt_validations.fetch_add(2, Ordering::Relaxed);
+    authz.checks.fetch_add(20, Ordering::Relaxed);
+    authz.allows.fetch_add(20, Ordering::Relaxed);
+    cache.insert(
+        "present".to_string(),
+        TokenType::Jwt {
+            raw: "fixture".to_string(),
+            claims: Claims {
+                sub: "fixture".to_string(),
+                exp: 2_000_000_000,
+                iss: None,
+                aud: None,
+                client_id: None,
+                roles: None,
+                grants: None,
+                denies: None,
+            },
+        },
+        Duration::from_secs(60),
+    );
+    assert!(cache.get(&"present".to_string()).is_some());
+    let after_second_run = read_diagnostic_snapshot();
+
+    assert_eq!(before["authentication"]["attempts"], 0);
+    assert_eq!(after_first_run["authentication"]["attempts"], 2);
+    assert_eq!(after_second_run["authentication"]["attempts"], 4);
+    assert_eq!(after_first_run["authorization"]["checks"], 20);
+    assert_eq!(after_second_run["authorization"]["checks"], 40);
+    assert_eq!(after_first_run["authentication"]["cache_misses"], 1);
+    assert_eq!(after_second_run["authentication"]["cache_hits"], 1);
+    assert_eq!(
+        after_second_run["authorization"]["policy_mode"],
+        "TokenOnly"
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AuthPath {
+    Basic,
+    Enhanced,
+}
+
+fn root_keypair() -> KeyPair {
+    let root_bytes = [1u8; 32];
+    KeyPair::from(&PrivateKey::from_bytes(&root_bytes, biscuit_auth::Algorithm::Ed25519).unwrap())
+}
+
+fn jwt_encoding_key() -> EncodingKey {
+    EncodingKey::from_ec_pem(TEST_JWT_PRIVATE_KEY_PEM.as_bytes())
+        .expect("test JWT private key should parse")
+}
+
+fn signed_jwt(sub: &str, client_id: Option<&str>, roles: Option<Vec<String>>) -> Vec<u8> {
+    let claims = Claims {
+        sub: sub.to_string(),
+        exp: 2_000_000_000,
+        iss: None,
+        aud: None,
+        client_id: client_id.map(ToOwned::to_owned),
+        roles,
+        grants: None,
+        denies: None,
+    };
+    encode(&Header::new(Algorithm::ES256), &claims, &jwt_encoding_key())
+        .expect("JWT should sign")
+        .into_bytes()
+}
+
+fn biscuit_token(identity_fact: Option<(&str, &str)>) -> Vec<u8> {
+    let keypair = root_keypair();
+    let mut builder = Biscuit::builder()
+        .fact(r#"right("publish", "sensors/client_1/temp")"#)
+        .expect("fact should build")
+        .fact("expires_at(2000000000)")
+        .expect("fact should build");
+    if let Some((predicate, value)) = identity_fact {
+        let fact = format!(r#"{predicate}("{value}")"#);
+        builder = builder
+            .fact(fact.as_str())
+            .expect("identity fact should build");
+    }
+    builder
+        .build(&keypair)
+        .expect("biscuit should build")
+        .to_vec()
+        .expect("biscuit should serialize")
+}
+
+fn configure_jwt_identity_binding(userdata: *mut c_void, mode: IdentityBindingMode) {
+    let state = unsafe { plugin_state_mut(userdata) };
+    state.config.jwt_identity_binding = mode;
+}
+
+fn configure_biscuit_identity_binding(
+    userdata: *mut c_void,
+    mode: IdentityBindingMode,
+    predicate: &str,
+) {
+    let state = unsafe { plugin_state_mut(userdata) };
+    state.config.biscuit_identity_binding = mode;
+    state.config.biscuit_client_id_fact = predicate.to_string();
+    state.config.biscuit.root_public_key = root_keypair().public();
+}
+
+fn run_auth_path(userdata: *mut c_void, path: AuthPath, token: &[u8]) -> c_int {
+    match path {
+        AuthPath::Basic => run_basic_auth(userdata, token),
+        AuthPath::Enhanced => run_enhanced_auth(userdata, token),
+    }
+}
+
+fn run_basic_auth(userdata: *mut c_void, token: &[u8]) -> c_int {
+    let username = CString::new("test_user").expect("username should build");
+    let mut token_bytes = token.to_vec();
+    let mut evt = MosquittoEvtBasicAuth {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        username: username.as_ptr().cast_mut(),
+        password: token_bytes.as_mut_ptr().cast(),
+        extra: MosquittoEvtBasicAuthFuture {
+            password_len: u16::try_from(token_bytes.len()).expect("token length fits u16"),
+        },
+    };
+
+    basic_auth_callback(
+        MOSQ_EVT_BASIC_AUTH,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    )
+}
+
+fn run_enhanced_auth(userdata: *mut c_void, token: &[u8]) -> c_int {
+    let auth_method = CString::new("token").expect("auth method should build");
+    let mut evt = MosquittoEvtExtendedAuth {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        data_in: token.as_ptr().cast::<c_void>(),
+        data_out: ptr::null_mut(),
+        data_in_len: u16::try_from(token.len()).expect("token length fits u16"),
+        data_out_len: 0,
+        auth_method: auth_method.as_ptr().cast::<c_char>(),
+        future2: [ptr::null_mut(); 3],
+    };
+
+    ext_auth_start_callback(
+        MOSQ_EVT_EXT_AUTH_START,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    )
+}
+
+fn initialize_plugin_with_config() -> (c_int, *mut c_void, MosquittoPluginId) {
+    let jwt_pub_pem = format!("{}/../../docker/jwt_public.pem", env!("CARGO_MANIFEST_DIR"));
+    let biscuit_root_key_file = format!(
+        "{}/../../docker/biscuit_public.key",
+        env!("CARGO_MANIFEST_DIR")
+    );
+
+    let cstrings: Vec<CString> = vec![
+        CString::new("jwt_alg").unwrap(),
+        CString::new("ES256").unwrap(),
+        CString::new("jwt_key_file").unwrap(),
+        CString::new(jwt_pub_pem).unwrap(),
+        CString::new("biscuit_root_key_file").unwrap(),
+        CString::new(biscuit_root_key_file).unwrap(),
+    ];
+
+    let mut opts = vec![
+        MosquittoOpt {
+            key: cstrings[0].as_ptr().cast_mut(),
+            value: cstrings[1].as_ptr().cast_mut(),
+        },
+        MosquittoOpt {
+            key: cstrings[2].as_ptr().cast_mut(),
+            value: cstrings[3].as_ptr().cast_mut(),
+        },
+        MosquittoOpt {
+            key: cstrings[4].as_ptr().cast_mut(),
+            value: cstrings[5].as_ptr().cast_mut(),
+        },
+    ];
+
+    let mut userdata: *mut c_void = ptr::null_mut();
+    let userdata_ptr: *mut *mut c_void = &raw mut userdata;
+    let mut identifier = MosquittoPluginId { _unused: [] };
+
+    let rc = unsafe {
+        mosquitto_plugin_init(
+            &raw mut identifier,
+            userdata_ptr,
+            opts.as_mut_ptr(),
+            c_int::try_from(opts.len()).expect("opts len fits c_int"),
+        )
+    };
+    (rc, userdata, identifier)
+}
+
+fn setup_plugin_with_config() -> (*mut c_void, MosquittoPluginId) {
+    let (rc, userdata, identifier) = initialize_plugin_with_config();
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+    assert!(!userdata.is_null());
+    (userdata, identifier)
+}
+
+#[test]
+fn plugin_init_rolls_back_registered_callbacks_before_freeing_userdata() {
+    reset_callback_registration_state(Some(MOSQ_EVT_TICK), None);
+
+    let (rc, userdata, _identifier) = initialize_plugin_with_config();
+
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+    assert!(userdata.is_null());
+    let (registered, unregistered) = callback_registration_state_snapshot();
+    assert_eq!(
+        registered,
+        vec![
+            MOSQ_EVT_BASIC_AUTH,
+            MOSQ_EVT_ACL_CHECK,
+            MOSQ_EVT_EXT_AUTH_START,
+            MOSQ_EVT_EXT_AUTH_CONTINUE,
+            MOSQ_EVT_MESSAGE,
+            MOSQ_EVT_MESSAGE_OUT,
+        ]
+    );
+    assert_eq!(
+        unregistered,
+        registered.iter().rev().copied().collect::<Vec<_>>()
+    );
+
+    reset_callback_registration_state(None, None);
+}
+
+#[test]
+fn plugin_init_retains_userdata_if_callback_rollback_fails() {
+    reset_callback_registration_state(Some(MOSQ_EVT_TICK), Some(MOSQ_EVT_MESSAGE));
+
+    let (rc, userdata, _identifier) = initialize_plugin_with_config();
+
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+    assert!(!userdata.is_null());
+    let (_, unregistered) = callback_registration_state_snapshot();
+    assert!(unregistered.contains(&MOSQ_EVT_MESSAGE));
+
+    // Mosquitto calls plugin cleanup during unload after an init failure. The
+    // retained pointer follows that ownership path instead of being freed while
+    // a callback can still reference it.
+    teardown_plugin(userdata);
+    reset_callback_registration_state(None, None);
+}
+
+fn teardown_plugin(userdata: *mut c_void) {
+    let rc = unsafe { mosquitto_plugin_cleanup(userdata, ptr::null_mut(), 0) };
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+}
+
+fn set_acl_read_full_authz(userdata: *mut c_void, enabled: bool) {
+    let state = unsafe { plugin_state_mut(userdata) };
+    state.config.acl_read_full_authz = enabled;
+}
+
+fn enable_dynamic_security_anonymous_mode(userdata: *mut c_void) {
+    let state = unsafe { plugin_state_mut(userdata) };
+    let dynsec_path = format!(
+        "{}/../../docker/dynamic-security-anon.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let policy = DynamicSecurityPolicy::new(dynsec_path.clone(), Duration::from_secs(1))
+        .expect("dynamic security anon policy should load for tests");
+    state.config.policy.mode = PolicyMode::DynamicSecurity;
+    state.config.policy.dynamic_security_url = Some(dynsec_path);
+    state.config.allow_anonymous_no_token = true;
+    state.dynamic_security_policy = Some(policy);
+}
+
+fn unique_test_prefix() -> String {
+    let pid = std::process::id();
+    let thread_id = format!("{:?}", std::thread::current().id());
+    format!("{pid}-{thread_id}")
+}
+
+fn enable_dynamic_security_control_mode_with_client_id(
+    userdata: *mut c_void,
+    include_client_id: bool,
+) -> String {
+    let unique = TEST_DYNSEC_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let prefix = unique_test_prefix();
+    let dynsec_path =
+        std::env::temp_dir().join(format!("dynsec-control-lib-{prefix}-{unique}.json"));
+    let client_id_line = if include_client_id {
+        "\"clientid\": \"test_client\","
+    } else {
+        ""
+    };
+    let dynsec_cfg = format!(
+        r#"{{
+  "clients": [
+    {{
+      "username": "test_user",
+      {client_id_line}
+      "roles": [{{"rolename": "controller", "priority": 0}}],
+      "disabled": false
+    }}
+  ],
+  "groups": [],
+  "roles": [
+    {{
+      "rolename": "controller",
+      "acls": [
+        {{
+          "acltype": "publishClientSend",
+          "topic": "$CONTROL/dynamic-security/v1",
+          "priority": 0,
+          "allow": true
+        }}
+      ]
+    }}
+  ],
+  "defaultACLAccess": {{
+    "publishClientSend": false,
+    "publishClientReceive": false,
+    "subscribe": false,
+    "unsubscribe": false
+  }}
+}}"#
+    );
+    fs::write(&dynsec_path, dynsec_cfg).expect("dynsec test control config must be writable");
+    let state = unsafe { plugin_state_mut(userdata) };
+    let policy = DynamicSecurityPolicy::new(
+        dynsec_path.to_string_lossy().into_owned(),
+        Duration::from_secs(60),
+    )
+    .expect("dynamic security control policy should load for tests");
+    state.config.policy.mode = PolicyMode::DynamicSecurity;
+    state.config.policy.dynamic_security_url = Some(dynsec_path.to_string_lossy().into_owned());
+    state.dynamic_security_policy = Some(policy);
+    dynsec_path.to_string_lossy().into_owned()
+}
+
+fn enable_dynamic_security_control_mode(userdata: *mut c_void) -> String {
+    enable_dynamic_security_control_mode_with_client_id(userdata, true)
+}
+
+fn enable_dynamic_security_control_notify_mode(userdata: *mut c_void) -> String {
+    let unique = TEST_DYNSEC_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let prefix = unique_test_prefix();
+    let dynsec_path =
+        std::env::temp_dir().join(format!("dynsec-control-notify-lib-{prefix}-{unique}.json"));
+    let dynsec_cfg = r#"{
+  "clients": [
+    {
+      "username": "test_user",
+      "clientid": "test_client",
+      "roles": [
+        {"rolename": "controller", "priority": 0},
+        {"rolename": "fanout_reader", "priority": 0}
+      ],
+      "disabled": false
+    }
+  ],
+  "groups": [],
+  "roles": [
+    {
+      "rolename": "controller",
+      "acls": [
+        {
+          "acltype": "publishClientSend",
+          "topic": "$CONTROL/dynamic-security/v1",
+          "priority": 0,
+          "allow": true
+        },
+        {
+          "acltype": "publishClientSend",
+          "topic": "fanout/broadcast",
+          "priority": 0,
+          "allow": true
+        }
+      ]
+    },
+    {
+      "rolename": "fanout_reader",
+      "acls": [
+        {
+          "acltype": "subscribeLiteral",
+          "topic": "fanout/broadcast",
+          "priority": 0,
+          "allow": true
+        },
+        {
+          "acltype": "publishClientReceive",
+          "topic": "fanout/broadcast",
+          "priority": 0,
+          "allow": true
+        }
+      ]
+    }
+  ],
+  "defaultACLAccess": {
+    "publishClientSend": false,
+    "publishClientReceive": false,
+    "subscribe": false,
+    "unsubscribe": false
+  }
+}"#;
+    fs::write(&dynsec_path, dynsec_cfg).expect("dynsec notify config must be writable");
+    let state = unsafe { plugin_state_mut(userdata) };
+    let policy = DynamicSecurityPolicy::new(
+        dynsec_path.to_string_lossy().into_owned(),
+        Duration::from_secs(60),
+    )
+    .expect("dynamic security notify policy should load for tests");
+    state.config.policy.mode = PolicyMode::DynamicSecurity;
+    state.config.policy.dynamic_security_url = Some(dynsec_path.to_string_lossy().into_owned());
+    state.config.control_notify_topic_prefix = "system_notification".to_string();
+    state.dynamic_security_policy = Some(policy);
+    dynsec_path.to_string_lossy().into_owned()
+}
+
+fn replace_dynsec_file_with_directory(path: &str) {
+    fs::remove_file(path).expect("dynsec test control config should be removable");
+    fs::create_dir(path).expect("dynsec test control config path should become a directory");
+}
+
+fn cleanup_dynsec_test_path(path: &str) {
+    let dynsec_path = Path::new(path);
+    if dynsec_path.is_dir() {
+        let _ = fs::remove_dir(dynsec_path);
+    } else if dynsec_path.exists() {
+        let _ = fs::remove_file(dynsec_path);
+    }
+}
+
+fn cache_test_jwt_for_client(userdata: *mut c_void, client_id: &str, exp: i64) {
+    let state = unsafe { plugin_state_mut(userdata) };
+    let token = TokenType::Jwt {
+        claims: Claims {
+            sub: client_id.to_string(),
+            exp,
+            iss: None,
+            aud: None,
+            client_id: None,
+            roles: None,
+            grants: None,
+            denies: None,
+        },
+        raw: "cached_token".to_string(),
+    };
+    state
+        .cache
+        .insert(client_id.to_string(), token, Duration::from_secs(60));
+}
+
+fn cache_test_jwt(userdata: *mut c_void, exp: i64) {
+    cache_test_jwt_for_client(userdata, "test_client", exp);
+}
+
+fn cache_test_biscuit(userdata: *mut c_void, expires_at: Option<i64>) {
+    let state = unsafe { plugin_state_mut(userdata) };
+    let token = TokenType::Biscuit {
+        bytes: vec![1, 2, 3],
+        expires_at,
+        roles: None,
+        biscuit: None,
+    };
+    state
+        .cache
+        .insert("test_client".to_string(), token, Duration::from_secs(60));
+}
+
+#[test]
+fn ffi_init_and_cleanup_are_miri_safe() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn normalize_username_maps_empty_to_none() {
+    assert_eq!(normalize_username(None), None);
+    assert_eq!(normalize_username(Some(String::new())), None);
+    assert_eq!(
+        normalize_username(Some("device_a".to_string())),
+        Some("device_a".to_string())
+    );
+}
+
+#[test]
+fn no_token_basic_auth_defer_policy_matrix() {
+    assert!(!should_defer_no_token_basic_auth(
+        PolicyMode::TokenOnly,
+        false
+    ));
+    assert!(!should_defer_no_token_basic_auth(
+        PolicyMode::DynamicSecurity,
+        false
+    ));
+    assert!(should_defer_no_token_basic_auth(
+        PolicyMode::DynamicSecurity,
+        true
+    ));
+    assert!(should_defer_no_token_basic_auth(
+        PolicyMode::StaticAcl,
+        false
+    ));
+    assert!(should_defer_no_token_basic_auth(
+        PolicyMode::StaticAclStrict,
+        false
+    ));
+}
+
+#[test]
+fn is_acl_read_only_bitmask_matrix() {
+    assert!(!is_acl_read_only(0));
+    assert!(is_acl_read_only(MOSQ_ACL_READ));
+    assert!(!is_acl_read_only(MOSQ_ACL_WRITE));
+    assert!(!is_acl_read_only(MOSQ_ACL_SUBSCRIBE));
+    assert!(!is_acl_read_only(MOSQ_ACL_CONTROL));
+    assert!(!is_acl_read_only(MOSQ_ACL_READ | MOSQ_ACL_WRITE));
+    assert!(!is_acl_read_only(MOSQ_ACL_READ | MOSQ_ACL_SUBSCRIBE));
+    assert!(!is_acl_read_only(MOSQ_ACL_READ | MOSQ_ACL_CONTROL));
+    assert!(!is_acl_read_only(
+        MOSQ_ACL_READ | MOSQ_ACL_WRITE | MOSQ_ACL_SUBSCRIBE
+    ));
+}
+
+#[test]
+fn static_acl_bias_warning_logs_for_biscuit_role_right_in_rbac_profile() {
+    let keypair = root_keypair();
+    let biscuit = Biscuit::builder()
+        .fact(r#"role("writer")"#)
+        .unwrap()
+        .fact(r#"role_right("writer", "publish", "sensors/client_1/#")"#)
+        .unwrap()
+        .build(&keypair)
+        .unwrap();
+    let token_type = TokenType::Biscuit {
+        bytes: biscuit.to_vec().unwrap(),
+        expires_at: None,
+        roles: None,
+        biscuit: None,
+    };
+
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let mut config = unsafe { plugin_state(userdata).config.clone() };
+    teardown_plugin(userdata);
+    config.policy.mode = PolicyMode::StaticAcl;
+    config.biscuit_authorizer_profile = BiscuitAuthorizerProfile::Rbac;
+    config.biscuit.root_public_key = keypair.public();
+
+    reset_debug_logs();
+    log_static_acl_policy_bias(&token_type, &config);
+    let logs = debug_logs_snapshot();
+    assert!(
+        logs.iter()
+            .any(|entry| entry.contains("StaticAcl warning: Biscuit token includes grant facts"))
+    );
+}
+
+#[test]
+fn basic_auth_callback_handles_null_pointers() {
+    let rc = basic_auth_callback(MOSQ_EVT_BASIC_AUTH, ptr::null_mut(), ptr::null_mut());
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn basic_auth_callback_handles_null_password() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let mut evt = MosquittoEvtBasicAuth {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        username: ptr::null_mut(),
+        password: ptr::null_mut(),
+        extra: MosquittoEvtBasicAuthFuture {
+            future2: [ptr::null_mut(); 4],
+        },
+    };
+
+    let rc = basic_auth_callback(
+        MOSQ_EVT_BASIC_AUTH,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_AUTH);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn anonymous_dynamic_security_authentication_records_defer_path() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    enable_dynamic_security_anonymous_mode(userdata);
+    let mut evt = MosquittoEvtBasicAuth {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        username: ptr::null_mut(),
+        password: ptr::null_mut(),
+        extra: MosquittoEvtBasicAuthFuture {
+            future2: [ptr::null_mut(); 4],
+        },
+    };
+
+    let rc = basic_auth_callback(
+        MOSQ_EVT_BASIC_AUTH,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    let state = unsafe { plugin_state(userdata) };
+
+    assert_eq!(rc, MOSQ_ERR_PLUGIN_DEFER);
+    assert_eq!(state.auth_metrics.attempts.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        state
+            .auth_metrics
+            .anonymous_deferrals
+            .load(Ordering::Relaxed),
+        1
+    );
+    assert_eq!(state.auth_metrics.successes.load(Ordering::Relaxed), 0);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn anonymous_dynamic_security_authorization_records_policy_decision() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    enable_dynamic_security_anonymous_mode(userdata);
+    let topic = CString::new("public/announce").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_WRITE,
+        payloadlen: 0,
+        qos: 1,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    let state = unsafe { plugin_state(userdata) };
+
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+    assert_eq!(state.authz_metrics.checks.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        state.authz_metrics.anonymous_checks.load(Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        state.authz_metrics.anonymous_allows.load(Ordering::Relaxed),
+        1
+    );
+    assert_eq!(
+        state.authz_metrics.anonymous_denies.load(Ordering::Relaxed),
+        0
+    );
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn basic_auth_callback_handles_valid_pointers() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let username = CString::new("test_user").unwrap();
+    let password = CString::new("invalid_token").unwrap();
+    let mut evt = MosquittoEvtBasicAuth {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        username: username.as_ptr().cast_mut(),
+        password: password.as_ptr().cast_mut(),
+        extra: MosquittoEvtBasicAuthFuture {
+            password_len: u16::try_from(password.as_bytes().len())
+                .expect("password length fits u16"),
+        },
+    };
+
+    let rc = basic_auth_callback(
+        MOSQ_EVT_BASIC_AUTH,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_AUTH);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn basic_auth_callback_accepts_binary_biscuit_password_with_nul_bytes() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let keypair = root_keypair();
+    unsafe {
+        (*userdata.cast::<PluginState>())
+            .config
+            .biscuit
+            .root_public_key = keypair.public();
+    }
+
+    let biscuit = Biscuit::builder()
+        .fact(r#"right("publish", "sensors/client_1/temp")"#)
+        .unwrap()
+        .fact(r#"right("subscribe", "sensors/client_1/temp")"#)
+        .unwrap()
+        .fact("expires_at(2000000000)")
+        .unwrap()
+        .build(&keypair)
+        .unwrap();
+    let mut password = biscuit.to_vec().unwrap();
+    assert!(
+        password.contains(&0),
+        "serialized Biscuit should exercise binary password handling"
+    );
+
+    let username = CString::new("biscuit").unwrap();
+    let mut evt = MosquittoEvtBasicAuth {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        username: username.as_ptr().cast_mut(),
+        password: password.as_mut_ptr().cast(),
+        extra: MosquittoEvtBasicAuthFuture {
+            password_len: u16::try_from(password.len()).expect("password length fits u16"),
+        },
+    };
+
+    let rc = basic_auth_callback(
+        MOSQ_EVT_BASIC_AUTH,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn ext_auth_start_callback_handles_null_pointers() {
+    let rc = ext_auth_start_callback(MOSQ_EVT_EXT_AUTH_START, ptr::null_mut(), ptr::null_mut());
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn ext_auth_start_callback_handles_null_data() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let auth_method = CString::new("token").unwrap();
+    let mut evt = MosquittoEvtExtendedAuth {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        data_in: ptr::null(),
+        data_out: ptr::null_mut(),
+        data_in_len: 0,
+        data_out_len: 0,
+        auth_method: auth_method.as_ptr().cast::<c_char>(),
+        future2: [ptr::null_mut(); 3],
+    };
+
+    let rc = ext_auth_start_callback(
+        MOSQ_EVT_EXT_AUTH_START,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_AUTH);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn ext_auth_start_callback_handles_valid_pointers() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let auth_method = CString::new("token").unwrap();
+    let token_data = b"invalid_token";
+    let mut evt = MosquittoEvtExtendedAuth {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        data_in: token_data.as_ptr().cast::<c_void>(),
+        data_out: ptr::null_mut(),
+        data_in_len: u16::try_from(token_data.len()).expect("token data length fits u16"),
+        data_out_len: 0,
+        auth_method: auth_method.as_ptr().cast::<c_char>(),
+        future2: [ptr::null_mut(); 3],
+    };
+
+    let rc = ext_auth_start_callback(
+        MOSQ_EVT_EXT_AUTH_START,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_AUTH);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn ext_auth_continue_callback_handles_null_pointers() {
+    let rc =
+        ext_auth_continue_callback(MOSQ_EVT_EXT_AUTH_CONTINUE, ptr::null_mut(), ptr::null_mut());
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn ext_auth_continue_callback_delegates_to_start() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let auth_method = CString::new("token").unwrap();
+    let token_data = b"invalid_token";
+    let mut evt = MosquittoEvtExtendedAuth {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        data_in: token_data.as_ptr().cast::<c_void>(),
+        data_out: ptr::null_mut(),
+        data_in_len: u16::try_from(token_data.len()).expect("token data length fits u16"),
+        data_out_len: 0,
+        auth_method: auth_method.as_ptr().cast::<c_char>(),
+        future2: [ptr::null_mut(); 3],
+    };
+
+    let rc = ext_auth_continue_callback(
+        MOSQ_EVT_EXT_AUTH_CONTINUE,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_AUTH);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn jwt_strict_accepts_matching_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        for token in [
+            signed_jwt("test_client", None, None),
+            signed_jwt("test_client", Some("test_client"), None),
+        ] {
+            let (userdata, _identifier) = setup_plugin_with_config();
+            configure_jwt_identity_binding(userdata, IdentityBindingMode::Strict);
+
+            let rc = run_auth_path(userdata, path, &token);
+            assert_eq!(rc, MOSQ_ERR_SUCCESS, "path={path:?}");
+
+            let state = unsafe { plugin_state(userdata) };
+            assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+            teardown_plugin(userdata);
+        }
+    }
+}
+
+#[test]
+fn jwt_strict_rejects_mismatched_live_client_id_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_jwt_identity_binding(userdata, IdentityBindingMode::Strict);
+        let token = signed_jwt("other_client", Some("other_client"), None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn jwt_strict_rejects_missing_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_jwt_identity_binding(userdata, IdentityBindingMode::Strict);
+        let token = signed_jwt("", None, None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn jwt_strict_rejects_inconsistent_sub_and_client_id_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_jwt_identity_binding(userdata, IdentityBindingMode::Strict);
+        let token = signed_jwt("test_client", Some("other_client"), None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn jwt_strict_rejects_whitespace_distinct_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_jwt_identity_binding(userdata, IdentityBindingMode::Strict);
+        let token = signed_jwt(" test_client ", Some(" test_client "), None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn jwt_off_accepts_inconsistent_sub_and_client_id_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_jwt_identity_binding(userdata, IdentityBindingMode::Off);
+        let token = signed_jwt("test_client", Some("other_client"), None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_SUCCESS, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn jwt_off_accepts_mismatched_live_client_id_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_jwt_identity_binding(userdata, IdentityBindingMode::Off);
+        let token = signed_jwt("other_client", Some("other_client"), None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_SUCCESS, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn biscuit_strict_accepts_matching_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_biscuit_identity_binding(userdata, IdentityBindingMode::Strict, "device_id");
+        let token = biscuit_token(Some(("device_id", "test_client")));
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_SUCCESS, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn biscuit_strict_rejects_whitespace_distinct_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_biscuit_identity_binding(userdata, IdentityBindingMode::Strict, "device_id");
+        let token = biscuit_token(Some(("device_id", " test_client ")));
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn biscuit_strict_rejects_mismatched_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_biscuit_identity_binding(userdata, IdentityBindingMode::Strict, "device_id");
+        let token = biscuit_token(Some(("device_id", "other_client")));
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn biscuit_strict_rejects_missing_identity_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_biscuit_identity_binding(userdata, IdentityBindingMode::Strict, "device_id");
+        let token = biscuit_token(None);
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_AUTH, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_none());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn biscuit_off_accepts_mismatched_live_client_id_in_basic_and_enhanced_auth() {
+    for path in [AuthPath::Basic, AuthPath::Enhanced] {
+        let (userdata, _identifier) = setup_plugin_with_config();
+        configure_biscuit_identity_binding(userdata, IdentityBindingMode::Off, "device_id");
+        let token = biscuit_token(Some(("device_id", "other_client")));
+
+        let rc = run_auth_path(userdata, path, &token);
+        assert_eq!(rc, MOSQ_ERR_SUCCESS, "path={path:?}");
+
+        let state = unsafe { plugin_state(userdata) };
+        assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+        teardown_plugin(userdata);
+    }
+}
+
+#[test]
+fn acl_check_callback_handles_null_pointers() {
+    let rc = acl_check_callback(MOSQ_EVT_ACL_CHECK, ptr::null_mut(), ptr::null_mut());
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn acl_check_callback_handles_null_topic() {
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: ptr::null(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: 1,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        ptr::null_mut(),
+    );
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn acl_check_callback_handles_valid_pointers() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let topic = CString::new("test/topic").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: topic.as_ptr().cast_mut(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: 1,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_expiry_only_allows_without_grants_when_flag_disabled() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_uses_full_authz_when_flag_enabled() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, true);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_write_still_requires_full_authz_when_read_fast_path_disabled() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_WRITE,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_subscribe_still_requires_full_authz_when_read_fast_path_disabled() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_SUBSCRIBE,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_rejects_expired_token_when_read_fast_path_disabled() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    cache_test_jwt(userdata, time::unix_timestamp_now() - 1);
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 1);
+    assert_eq!(kick.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(kick.last_with_will, Some(false));
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn acl_read_expired_token_does_not_fall_back_to_dynamic_security_anonymous_after_kick() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    enable_dynamic_security_anonymous_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() - 1);
+
+    let topic = CString::new("public/announce").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc1 = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc1, MOSQ_ERR_ACL_DENIED);
+
+    let rc2 = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc2, MOSQ_ERR_ACL_DENIED);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 2);
+    assert_eq!(kick.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(kick.last_with_will, Some(false));
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_rejects_expired_token_with_disconnect_when_full_authz_enabled() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, true);
+    cache_test_jwt(userdata, time::unix_timestamp_now() - 1);
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 1);
+    assert_eq!(kick.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(kick.last_with_will, Some(false));
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_expiry_only_allows_biscuit_when_flag_disabled() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    cache_test_biscuit(userdata, Some(time::unix_timestamp_now() + 60));
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_uses_full_authz_for_biscuit_when_flag_enabled() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, true);
+    cache_test_biscuit(userdata, Some(time::unix_timestamp_now() + 60));
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn acl_read_rejects_expired_biscuit_when_flag_disabled() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    set_acl_read_full_authz(userdata, false);
+    cache_test_biscuit(userdata, Some(time::unix_timestamp_now() - 1));
+
+    let topic = CString::new("fanout/broadcast").unwrap();
+    let mut evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = acl_check_callback(
+        MOSQ_EVT_ACL_CHECK,
+        (&raw mut evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 1);
+    assert_eq!(kick.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(kick.last_with_will, Some(false));
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn message_callback_handles_null_pointers() {
+    let rc = message_callback(MOSQ_EVT_MESSAGE, ptr::null_mut(), ptr::null_mut());
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn message_callback_handles_null_topic() {
+    let mut evt = MosquittoEvtMessage {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: ptr::null_mut(),
+        payload: ptr::null_mut(),
+        properties: ptr::null_mut(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = message_callback(
+        MOSQ_EVT_MESSAGE,
+        (&raw mut evt).cast::<c_void>(),
+        ptr::null_mut(),
+    );
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn message_callback_handles_valid_pointers() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let topic = CString::new("test/topic").unwrap();
+    let mut evt = MosquittoEvtMessage {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: topic.as_ptr().cast_mut(),
+        payload: ptr::null_mut(),
+        properties: ptr::null_mut(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = message_callback(MOSQ_EVT_MESSAGE, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn message_callback_does_not_apply_dynamic_security_control_payload() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user"}]}"#;
+    let mut evt = MosquittoEvtMessage {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast_mut(),
+        payload: payload.as_ptr().cast::<c_void>().cast_mut(),
+        properties: ptr::null_mut(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = message_callback(MOSQ_EVT_MESSAGE, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn dynamic_security_control_response_preserves_command_correlations() {
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user","correlationData":"one"},{"command":"removeRoleACL","correlationData":"two"}]}"#;
+    let response = dynamic_security_control_response(payload, &[], &[]);
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    let responses = value["responses"].as_array().unwrap();
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["command"], "disableClient");
+    assert_eq!(responses[0]["correlationData"], "one");
+    assert_eq!(responses[1]["command"], "removeRoleACL");
+    assert_eq!(responses[1]["correlationData"], "two");
+}
+
+#[test]
+fn dynamic_security_control_response_reports_application_error() {
+    let response = dynamic_security_control_response(
+        br#"{"commands":[{"command":"disableClient","correlationData":"one"}]}"#,
+        &[Some("policy update failed".to_string())],
+        &[],
+    );
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["responses"][0]["error"], "policy update failed");
+}
+
+#[test]
+fn dynamic_security_control_response_reports_errors_per_command() {
+    let response = dynamic_security_control_response(
+        br#"{"commands":[{"command":"removeGroupClient","correlationData":"one"},{"command":"listRoles","correlationData":"two"}]}"#,
+        &[None, Some("unsupported command: listRoles".to_string())],
+        &[],
+    );
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert!(value["responses"][0].get("error").is_none());
+    assert_eq!(value["responses"][0]["correlationData"], "one");
+    assert_eq!(
+        value["responses"][1]["error"],
+        "unsupported command: listRoles"
+    );
+    assert_eq!(value["responses"][1]["correlationData"], "two");
+}
+
+#[test]
+fn dynamic_security_control_response_includes_read_data_without_error() {
+    let payload =
+        br#"{"commands":[{"command":"getClient","username":"test_user","correlationData":"one"}]}"#;
+    let data = serde_json::json!({"client": {"username": "test_user"}});
+    let response = dynamic_security_control_response(payload, &[None], &[Some(data.clone())]);
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["responses"][0]["command"], "getClient");
+    assert_eq!(value["responses"][0]["correlationData"], "one");
+    assert_eq!(value["responses"][0]["data"], data);
+    assert!(value["responses"][0].get("error").is_none());
+}
+
+#[test]
+fn dynamic_security_control_response_prefers_error_over_data() {
+    let payload =
+        br#"{"commands":[{"command":"getClient","username":"missing","correlationData":"one"}]}"#;
+    let data = serde_json::json!({"client": {"username": "missing"}});
+    let response = dynamic_security_control_response(
+        payload,
+        &[Some("Client not found".to_string())],
+        &[Some(data)],
+    );
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["responses"][0]["error"], "Client not found");
+    assert!(value["responses"][0].get("data").is_none());
+}
+
+#[test]
+fn session_client_lookup_prunes_stale_bindings() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let state = unsafe { plugin_state(userdata) };
+    bind_session_username(state, "stale_client", Some("test_user"));
+
+    let resolved = session_client_ids_for_username(state, "test_user");
+    assert!(resolved.is_empty());
+
+    let remaining = state
+        .session_index
+        .lock()
+        .expect("session index lock should succeed")
+        .client_ids_for_username("test_user");
+    assert!(remaining.is_empty());
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_handles_null_pointers() {
+    let rc = control_callback(MOSQ_EVT_CONTROL, ptr::null_mut(), ptr::null_mut());
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn control_callback_handles_null_topic() {
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: ptr::null(),
+        payload: ptr::null(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(
+        MOSQ_EVT_CONTROL,
+        (&raw mut evt).cast::<c_void>(),
+        ptr::null_mut(),
+    );
+    assert_eq!(rc, MOSQ_ERR_INVAL);
+}
+
+#[test]
+fn control_callback_defers_non_control_topics() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    // Non-control topics should be deferred (MOSQ_ERR_PLUGIN_DEFER)
+    let topic = CString::new("regular/topic/path").unwrap();
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: ptr::null(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    // Non-$CONTROL topics should defer to other plugins
+    assert_eq!(rc, MOSQ_ERR_PLUGIN_DEFER);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_handles_valid_pointers() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+
+    let topic = CString::new("$CONTROL/test").unwrap();
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: ptr::null_mut(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: ptr::null(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_ACL_DENIED);
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_disable_client_defers_self_target_cache_eviction() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user"}]}"#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+    let policy = state
+        .dynamic_security_policy
+        .as_ref()
+        .expect("dynamic security policy should be configured");
+    assert!(
+        !policy
+            .check(
+                Some("test_user"),
+                Some("test_client"),
+                "$CONTROL/dynamic-security/v1",
+                MOSQ_ACL_WRITE
+            )
+            .expect("policy check should succeed")
+    );
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_disable_client_kicks_session_index_target_without_client_id() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode_with_client_id(userdata, false);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+    cache_test_jwt_for_client(userdata, "target_client", time::unix_timestamp_now() + 60);
+
+    let state = unsafe { plugin_state(userdata) };
+    bind_session_username(state, "target_client", Some("test_user"));
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user"}]}"#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 1);
+    assert_eq!(kick.last_client_id.as_deref(), Some("target_client"));
+    assert_eq!(kick.last_with_will, Some(false));
+
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"target_client".to_string()).is_none());
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_disable_client_stale_session_index_target_skips_kick() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode_with_client_id(userdata, false);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let state = unsafe { plugin_state(userdata) };
+    bind_session_username(state, "stale_client", Some("test_user"));
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user"}]}"#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    let remaining = state
+        .session_index
+        .lock()
+        .expect("session index lock should succeed")
+        .client_ids_for_username("test_user");
+    assert!(remaining.is_empty());
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_remove_role_acl_publishes_notification_without_kick() {
+    reset_kick_client_call();
+    reset_broker_publish_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_notify_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let state = unsafe { plugin_state(userdata) };
+    bind_session_username(state, "test_client", Some("test_user"));
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"removeRoleACL","rolename":"fanout_reader","acltype":"publishClientReceive","topic":"fanout/broadcast"}]}"#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    let publish = broker_publish_call_snapshot();
+    assert_eq!(publish.count, 2);
+    assert_eq!(publish.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(
+        publish.last_topic.as_deref(),
+        Some("$CONTROL/dynamic-security/v1/response")
+    );
+    let payload_text = publish.last_payload.unwrap_or_default();
+    assert!(payload_text.contains("\"command\":\"removeRoleACL\""));
+    assert!(payload_text.contains("\"responses\""));
+
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[allow(clippy::too_many_lines)]
+#[test]
+fn control_callback_group_membership_churn_publishes_notify_without_kick() {
+    reset_kick_client_call();
+    reset_broker_publish_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let state = unsafe { plugin_state_mut(userdata) };
+    state.config.control_notify_topic_prefix = "system_notification".to_string();
+    bind_session_username(state, "test_client", Some("test_user"));
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let grant_payload = br#"{
+          "commands": [
+            {
+              "command":"createRole",
+              "rolename":"fanout_reader",
+              "acls":[
+                {"acltype":"subscribeLiteral","topic":"fanout/broadcast","priority":1,"allow":true},
+                {"acltype":"publishClientReceive","topic":"fanout/broadcast","priority":1,"allow":true}
+              ]
+            },
+            {
+              "command":"createGroup",
+              "groupname":"fanout",
+              "roles":[{"rolename":"fanout_reader","priority":5}]
+            },
+            {
+              "command":"addGroupClient",
+              "groupname":"fanout",
+              "username":"test_user",
+              "priority":7
+            }
+          ]
+        }"#;
+    let mut grant_evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: grant_payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(grant_payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(
+        MOSQ_EVT_CONTROL,
+        (&raw mut grant_evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+    let publish = broker_publish_call_snapshot();
+    assert_eq!(publish.count, 1);
+
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+    let policy = state
+        .dynamic_security_policy
+        .as_ref()
+        .expect("dynamic security policy should be configured");
+    assert!(
+        policy
+            .check(
+                Some("test_user"),
+                Some("test_client"),
+                "fanout/broadcast",
+                MOSQ_ACL_READ
+            )
+            .expect("policy check should succeed")
+    );
+
+    let revoke_payload =
+            br#"{"commands":[{"command":"removeGroupClient","groupname":"fanout","username":"test_user"}]}"#;
+    let mut revoke_evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: revoke_payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(revoke_payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(
+        MOSQ_EVT_CONTROL,
+        (&raw mut revoke_evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+    let publish = broker_publish_call_snapshot();
+    assert_eq!(publish.count, 3);
+    assert_eq!(publish.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(
+        publish.last_topic.as_deref(),
+        Some("$CONTROL/dynamic-security/v1/response")
+    );
+    let payload_text = publish.last_payload.unwrap_or_default();
+    assert!(payload_text.contains("\"command\":\"removeGroupClient\""));
+    assert!(payload_text.contains("\"responses\""));
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+    let policy = state
+        .dynamic_security_policy
+        .as_ref()
+        .expect("dynamic security policy should be configured");
+    assert!(
+        !policy
+            .check(
+                Some("test_user"),
+                Some("test_client"),
+                "fanout/broadcast",
+                MOSQ_ACL_READ
+            )
+            .expect("policy check should succeed")
+    );
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_add_group_client_updates_existing_priority_without_side_effects() {
+    reset_kick_client_call();
+    reset_broker_publish_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let grant_payload = br#"{
+          "commands": [
+            {
+              "command":"createRole",
+              "rolename":"fanout_reader",
+              "acls":[
+                {"acltype":"subscribeLiteral","topic":"fanout/broadcast","priority":1,"allow":true},
+                {"acltype":"publishClientReceive","topic":"fanout/broadcast","priority":1,"allow":true}
+              ]
+            },
+            {
+              "command":"createGroup",
+              "groupname":"fanout",
+              "roles":[{"rolename":"fanout_reader","priority":5}]
+            },
+            {
+              "command":"addGroupClient",
+              "groupname":"fanout",
+              "username":"test_user",
+              "priority":7
+            }
+          ]
+        }"#;
+    let mut grant_evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: grant_payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(grant_payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(
+        MOSQ_EVT_CONTROL,
+        (&raw mut grant_evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let update_payload =
+            br#"{"commands":[{"command":"addGroupClient","groupname":"fanout","username":"test_user","priority":1}]}"#;
+    let mut update_evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: update_payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(update_payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(
+        MOSQ_EVT_CONTROL,
+        (&raw mut update_evt).cast::<c_void>(),
+        userdata,
+    );
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+    let publish = broker_publish_call_snapshot();
+    assert_eq!(publish.count, 2);
+
+    let raw = fs::read_to_string(&dynsec_path).expect("dynsec config should be readable");
+    let root: serde_json::Value = serde_json::from_str(&raw).expect("dynsec config should parse");
+    let groups = root["groups"]
+        .as_array()
+        .expect("groups should be an array");
+    let fanout_group = groups
+        .iter()
+        .find(|group| group["groupname"].as_str() == Some("fanout"))
+        .expect("fanout group should exist");
+    let clients = fanout_group["clients"]
+        .as_array()
+        .expect("group clients should be an array");
+    let test_user = clients
+        .iter()
+        .find(|entry| entry["username"].as_str() == Some("test_user"))
+        .expect("test_user group client should exist");
+    assert_eq!(test_user["priority"].as_i64(), Some(1));
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_persist_failure_keeps_transport_success_and_applies_runtime_change() {
+    reset_kick_client_call();
+    reset_broker_publish_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let state = unsafe { plugin_state_mut(userdata) };
+    bind_session_username(state, "test_client", Some("test_user"));
+    state.config.control_notify_topic_prefix = "system_notification".to_string();
+    replace_dynsec_file_with_directory(&dynsec_path);
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{
+          "commands": [
+            {
+              "command":"createRole",
+              "rolename":"fanout_reader",
+              "acls":[
+                {"acltype":"subscribeLiteral","topic":"fanout/broadcast","priority":1,"allow":true},
+                {"acltype":"publishClientReceive","topic":"fanout/broadcast","priority":1,"allow":true}
+              ]
+            },
+            {
+              "command":"createGroup",
+              "groupname":"fanout",
+              "roles":[{"rolename":"fanout_reader","priority":5}]
+            },
+            {
+              "command":"addGroupClient",
+              "groupname":"fanout",
+              "username":"test_user",
+              "priority":7
+            }
+          ]
+        }"#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+    let publish = broker_publish_call_snapshot();
+    assert_eq!(publish.count, 2);
+    assert_eq!(publish.last_client_id.as_deref(), Some("test_client"));
+    assert_eq!(
+        publish.last_topic.as_deref(),
+        Some("$CONTROL/dynamic-security/v1/response")
+    );
+    let payload_text = publish.last_payload.unwrap_or_default();
+    assert!(payload_text.contains("\"command\":\"addGroupClient\""));
+
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+    let policy = state
+        .dynamic_security_policy
+        .as_ref()
+        .expect("dynamic security policy should be configured");
+    assert!(
+        policy
+            .check(
+                Some("test_user"),
+                Some("test_client"),
+                "fanout/broadcast",
+                MOSQ_ACL_READ
+            )
+            .expect("policy check should succeed")
+    );
+
+    cleanup_dynsec_test_path(&dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn message_out_callback_has_lock_free_inactive_path() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let state = unsafe { plugin_state(userdata) };
+    assert!(!has_deferred_control_disconnect(state));
+
+    let mut outgoing_evt = MosquittoEvtMessage {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: ptr::null_mut(),
+        payload: ptr::null_mut(),
+        properties: ptr::null_mut(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+    assert_eq!(
+        message_out_callback(
+            MOSQ_EVT_MESSAGE_OUT,
+            (&raw mut outgoing_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+
+    assert!(defer_control_disconnect_until_response(
+        state,
+        "test_client",
+        br#"{"responses":[]}"#,
+    ));
+    assert!(has_deferred_control_disconnect(state));
+    assert_eq!(
+        message_out_callback(
+            MOSQ_EVT_MESSAGE_OUT,
+            (&raw mut outgoing_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_INVAL
+    );
+    cancel_deferred_control_disconnect(state, "test_client");
+    assert!(!has_deferred_control_disconnect(state));
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn tick_callback_has_lock_free_inactive_path() {
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let state = unsafe { plugin_state(userdata) };
+    assert!(!has_deferred_control_disconnect(state));
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _guard = state
+            .deferred_control_disconnects
+            .lock()
+            .expect("deferred disconnect lock should initially be available");
+        panic!("poison deferred disconnect lock");
+    }));
+    assert!(state.deferred_control_disconnects.is_poisoned());
+
+    let mut tick_evt = MosquittoEvtTick {
+        future: ptr::null_mut(),
+        now_ns: 0,
+        next_ms: 0,
+        now_s: 0,
+        next_s: 0,
+        future2: [ptr::null_mut(); 4],
+    };
+    reset_debug_logs();
+    assert_eq!(
+        tick_callback(
+            MOSQ_EVT_TICK,
+            (&raw mut tick_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+    assert!(
+        debug_logs_snapshot()
+            .iter()
+            .all(|entry| !entry.contains("Deferred control disconnect drain skipped"))
+    );
+
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_self_disable_waits_for_response_outbound_dispatch_before_kick() {
+    reset_kick_client_call();
+    reset_broker_publish_call();
+    reset_control_action_log();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let state = unsafe { plugin_state_mut(userdata) };
+    state.config.control_notify_topic_prefix = "system_notification".to_string();
+    state.config.acl_read_full_authz = true;
+    replace_dynsec_file_with_directory(&dynsec_path);
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user"}]}"#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let publish = broker_publish_call_snapshot();
+    assert_eq!(publish.count, 2);
+    assert_eq!(publish.last_client_id.as_deref(), Some("test_client"));
+    let payload_text = publish.last_payload.unwrap_or_default();
+    assert!(payload_text.contains("\"command\":\"disableClient\""));
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+
+    let mut tick_evt = MosquittoEvtTick {
+        future: ptr::null_mut(),
+        now_ns: 0,
+        next_ms: 0,
+        now_s: 0,
+        next_s: 0,
+        future2: [ptr::null_mut(); 4],
+    };
+    assert_eq!(
+        tick_callback(
+            MOSQ_EVT_TICK,
+            (&raw mut tick_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+    assert_eq!(kick_client_call_snapshot().count, 0);
+
+    let response_topic = CString::new(DYNAMIC_SECURITY_CONTROL_RESPONSE_TOPIC).unwrap();
+    let mut acl_evt = MosquittoEvtAclCheck {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: response_topic.as_ptr(),
+        payload: ptr::null(),
+        properties: ptr::null_mut(),
+        access: MOSQ_ACL_READ,
+        payloadlen: 0,
+        qos: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+    assert_eq!(
+        acl_check_callback(
+            MOSQ_EVT_ACL_CHECK,
+            (&raw mut acl_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+
+    let mut outgoing_evt = MosquittoEvtMessage {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: response_topic.as_ptr().cast_mut(),
+        payload: ptr::null_mut(),
+        properties: ptr::null_mut(),
+        reason_string: ptr::null_mut(),
+        payloadlen: 0,
+        qos: 0,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let unrelated_payload =
+        br#"{"responses":[{"command":"listRoles","correlationData":"earlier"}]}"#;
+    outgoing_evt.payload = unrelated_payload.as_ptr().cast::<c_void>().cast_mut();
+    outgoing_evt.payloadlen =
+        u32::try_from(unrelated_payload.len()).expect("unrelated response length fits u32");
+    assert_eq!(
+        message_out_callback(
+            MOSQ_EVT_MESSAGE_OUT,
+            (&raw mut outgoing_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+    assert_eq!(
+        tick_callback(
+            MOSQ_EVT_TICK,
+            (&raw mut tick_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+    assert_eq!(kick_client_call_snapshot().count, 0);
+
+    outgoing_evt.payload = payload_text.as_ptr().cast::<c_void>().cast_mut();
+    outgoing_evt.payloadlen =
+        u32::try_from(payload_text.len()).expect("control response length fits u32");
+    assert_eq!(
+        message_out_callback(
+            MOSQ_EVT_MESSAGE_OUT,
+            (&raw mut outgoing_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+    assert_eq!(kick_client_call_snapshot().count, 0);
+
+    assert_eq!(
+        tick_callback(
+            MOSQ_EVT_TICK,
+            (&raw mut tick_evt).cast::<c_void>(),
+            userdata,
+        ),
+        MOSQ_ERR_SUCCESS
+    );
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 1);
+    assert_eq!(kick.last_client_id.as_deref(), Some("test_client"));
+
+    let actions = control_action_log_snapshot();
+    assert_eq!(
+        actions,
+        vec![
+            TestControlAction::Publish {
+                client_id: Some("test_client".to_string()),
+            },
+            TestControlAction::Publish {
+                client_id: Some("test_client".to_string()),
+            },
+            TestControlAction::Kick {
+                client_id: Some("test_client".to_string()),
+            },
+        ]
+    );
+
+    cleanup_dynsec_test_path(&dynsec_path);
+    teardown_plugin(userdata);
+}
+
+#[test]
+fn control_callback_invalid_payload_does_not_kick_or_evict_cache() {
+    reset_kick_client_call();
+    let (userdata, _identifier) = setup_plugin_with_config();
+    let dynsec_path = enable_dynamic_security_control_mode(userdata);
+    cache_test_jwt(userdata, time::unix_timestamp_now() + 60);
+
+    let topic = CString::new("$CONTROL/dynamic-security/v1").unwrap();
+    let payload = br#"{"commands":[{"command":"disableClient","username":"test_user""#;
+    let mut evt = MosquittoEvtControl {
+        future: ptr::null_mut(),
+        client: std::ptr::dangling_mut::<c_void>(),
+        topic: topic.as_ptr().cast::<c_char>(),
+        payload: payload.as_ptr().cast::<c_void>(),
+        properties: ptr::null(),
+        reason_string: ptr::null_mut(),
+        payloadlen: u32::try_from(payload.len()).expect("payload length fits u32"),
+        qos: 1,
+        reason_code: 0,
+        retain: false,
+        future2: [ptr::null_mut(); 4],
+    };
+
+    let rc = control_callback(MOSQ_EVT_CONTROL, (&raw mut evt).cast::<c_void>(), userdata);
+    assert_eq!(rc, MOSQ_ERR_SUCCESS);
+
+    let kick = kick_client_call_snapshot();
+    assert_eq!(kick.count, 0);
+    let state = unsafe { plugin_state(userdata) };
+    assert!(state.cache.get(&"test_client".to_string()).is_some());
+
+    let _ = fs::remove_file(dynsec_path);
+    teardown_plugin(userdata);
+}

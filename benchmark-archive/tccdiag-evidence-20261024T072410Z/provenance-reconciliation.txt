@@ -1,0 +1,21 @@
+Provenance reconciliation (2026-10-24)
+
+The phrase "unchanged 120 s publish budget" in the prior report was imprecise.
+
+Truth from the completed c200/q1 diagnostic result
+(results/HTTP-LATENCY-1000MS-JWT.json, scenario_config):
+- publish_timeout_seconds = 415
+- connect_timeout_seconds = 415
+- keepalive_seconds = 215
+
+Truth from source:
+- SYNC_BARRIER_TIMEOUT_SECONDS = 120 (run_scenarios.py:76), used only for the
+  pre-CONNECT startup barrier and runtime-control barrier.
+- _watchdog_metadata() derives the effective publish/connect timeout from
+  _publish_timeout_seconds() and the effective keepalive from
+  _mqtt_keepalive_seconds().
+
+Correct statement:
+- 120 s is the unchanged PRE-CONNECT barrier/startup budget.
+- The c200/LAT1000 workload used an effective publish and CONNECT timeout of
+  415 s and an effective keepalive of 215 s.

@@ -1,0 +1,29 @@
+{
+  "frozen_commit": "56344b77e49fff477b7ec7456fdf3e4469d995b4",
+  "cell": {
+    "workload_shape": "matrix",
+    "clients": 10,
+    "messages": 10,
+    "client_topology": "container-per-client",
+    "client_memory": "96m"
+  },
+  "batch": "idx032-047",
+  "status": "ENVIRONMENT-BLOCKED",
+  "reason": "Host NIC, Docker bridges and veth path are MTU 1500 and cannot exercise the required jumbo (9000) path. Independently verified as ENVIRONMENT-BLOCKED during qualification (Part 1 matrix c10/m10: 109 PASS, 3 ENVIRONMENT-BLOCKED idx44/45/47, 0 FAIL). Not PASS, not FAIL; intentionally not executed in final-data collection.",
+  "blocked_scenarios": [
+    {
+      "index": 44,
+      "scenario": "NETWORK-MTU-9000-BISCUIT-CHAIN-25"
+    },
+    {
+      "index": 45,
+      "scenario": "NETWORK-MTU-9000-BISCUIT-CHAIN-25-TLS"
+    },
+    {
+      "index": 47,
+      "scenario": "NETWORK-MTU-9000-JWT-TLS"
+    }
+  ],
+  "runnable_note": "idx46 NETWORK-MTU-9000-JWT executes normally (small-payload sibling passes on MTU-1500 host).",
+  "repetition": 1
+}

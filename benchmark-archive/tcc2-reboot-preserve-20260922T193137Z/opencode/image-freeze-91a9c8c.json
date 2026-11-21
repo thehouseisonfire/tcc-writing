@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "source_commit": "91a9c8cbe7c3a76187c8b22b9d34859b491c5a44",
+  "compose_files": [
+    {
+      "path": "docker/docker-compose.yml",
+      "sha256": "f764cebf20c927c2a4dbefa317b34ca7daf492a96c1b16632f1c3294025be2b8"
+    },
+    {
+      "path": "docker/docker-compose.tls.yml",
+      "sha256": "dadfd360c0303c6389fa5cc6f6c2d71b09c2e6e3d81e5686a79987c685c6cce6"
+    }
+  ],
+  "services": [
+    {
+      "service": "authz",
+      "image": "docker-authz",
+      "image_id": "sha256:587eca35f258ca84376809ee51d051d86053fe5901dfe8e4fc267e32da2de0ea",
+      "repo_digests": [
+        "docker-authz@sha256:587eca35f258ca84376809ee51d051d86053fe5901dfe8e4fc267e32da2de0ea"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "loadgen",
+      "image": "docker-loadgen",
+      "image_id": "sha256:bb14b6906e26a6124a3c87948d385d17716bdd82b02aac52260ae8a89341a099",
+      "repo_digests": [
+        "docker-loadgen@sha256:bb14b6906e26a6124a3c87948d385d17716bdd82b02aac52260ae8a89341a099"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "netem",
+      "image": "docker-netem",
+      "image_id": "sha256:76b80d5f6396f84116d5be63f06df59fc702aabd57ad9710a8b38330328d6e7b",
+      "repo_digests": [
+        "docker-netem@sha256:76b80d5f6396f84116d5be63f06df59fc702aabd57ad9710a8b38330328d6e7b"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "sync-barrier",
+      "image": "docker-sync-barrier",
+      "image_id": "sha256:a45634f85fde1331fdb4710279ad5b967f264c19016c5f411e4c769c78247c12",
+      "repo_digests": [
+        "docker-sync-barrier@sha256:a45634f85fde1331fdb4710279ad5b967f264c19016c5f411e4c769c78247c12"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "tcpdump",
+      "image": "docker-tcpdump",
+      "image_id": "sha256:1b278df5aab7ccb9a3e89fcad8a704effc3f4befad34af7103b9a066d14e56c6",
+      "repo_digests": [
+        "docker-tcpdump@sha256:1b278df5aab7ccb9a3e89fcad8a704effc3f4befad34af7103b9a066d14e56c6"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "token-issuer",
+      "image": "docker-token-issuer",
+      "image_id": "sha256:e6a7ce4959fcef2ce3604786e869e445f0ffefc0835d5c5499fa06c2d9cd3a15",
+      "repo_digests": [
+        "docker-token-issuer@sha256:e6a7ce4959fcef2ce3604786e869e445f0ffefc0835d5c5499fa06c2d9cd3a15"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "cadvisor",
+      "image": "ghcr.io/google/cadvisor:0.56.2@sha256:5534ae91cbf3428998d60428d107cfdd97272d80658534ac6e54d8ce3b0c4d72",
+      "image_id": "sha256:5534ae91cbf3428998d60428d107cfdd97272d80658534ac6e54d8ce3b0c4d72",
+      "repo_digests": [
+        "ghcr.io/google/cadvisor@sha256:5534ae91cbf3428998d60428d107cfdd97272d80658534ac6e54d8ce3b0c4d72"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "mosquitto",
+      "image": "mosquitto:2.1.3-custom",
+      "image_id": "sha256:5311b870eb9002d003afc95d5168c4b325f40c2c2e65bb9ef810684070fceb50",
+      "repo_digests": [
+        "mosquitto@sha256:5311b870eb9002d003afc95d5168c4b325f40c2c2e65bb9ef810684070fceb50"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "iperf3",
+      "image": "networkstatic/iperf3:latest@sha256:07dcca91c0e47d82d83d91de8c3d46b840eef4180499456b4fa8d6dadb46b6c8",
+      "image_id": "sha256:07dcca91c0e47d82d83d91de8c3d46b840eef4180499456b4fa8d6dadb46b6c8",
+      "repo_digests": [
+        "networkstatic/iperf3@sha256:07dcca91c0e47d82d83d91de8c3d46b840eef4180499456b4fa8d6dadb46b6c8"
+      ],
+      "platform": "linux/amd64"
+    },
+    {
+      "service": "metrics-collector",
+      "image": "prom/prometheus:v3.10.0@sha256:4a61322ac1103a0e3aea2a61ef1718422a48fa046441f299d71e660a3bc71ae9",
+      "image_id": "sha256:4a61322ac1103a0e3aea2a61ef1718422a48fa046441f299d71e660a3bc71ae9",
+      "repo_digests": [
+        "prom/prometheus@sha256:4a61322ac1103a0e3aea2a61ef1718422a48fa046441f299d71e660a3bc71ae9"
+      ],
+      "platform": "linux/amd64"
+    }
+  ],
+  "archive": null
+}

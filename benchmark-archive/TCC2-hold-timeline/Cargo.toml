@@ -1,0 +1,19 @@
+[workspace]
+members = [
+  "tools/benchmark-host-helper",
+  "tools/benchmark-host-smoke",
+  "tools/check-pins",
+  "tools/check-docs",
+  "tools/render-benchmark-inventory",
+  "tools/run-benchmarks",
+]
+default-members = [
+  "tools/benchmark-host-helper",
+  "tools/benchmark-host-smoke",
+  "tools/check-pins",
+  "tools/check-docs",
+  "tools/render-benchmark-inventory",
+  "tools/run-benchmarks",
+]
+exclude = ["mqtt-auth-biscuit"]
+resolver = "3"

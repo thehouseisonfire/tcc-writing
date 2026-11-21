@@ -1,0 +1,1 @@
+image freeze OK: 10 services, source commit f152e92f870df2f67f4276f2f7a860412296da87

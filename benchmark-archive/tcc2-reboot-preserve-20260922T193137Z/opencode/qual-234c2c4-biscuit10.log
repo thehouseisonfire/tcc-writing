@@ -1,0 +1,176 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running `target/debug/run-benchmarks --scenarios TOKEN-ACL-READ-FANOUT-EXPIRY-ONLY-BISCUIT-10 --workload-shape fixed-clients --messages 10 --client-topology container-per-client --client-memory 96m --skip-build --skip-tokens --no-build-images`
+Using docker compose: docker compose
+Skipping build (per --skip-build)
+Skipping token generation (per --skip-tokens)
+Running scenarios...
+[16:23:13] INFO     image freeze verified: source commit   run_scenarios.py:8152
+                    234c2c4518bd45e16ef54f1999819a0350fbc5                      
+                    05, 10 services                                             
+           INFO     Packet capture enabled using dpkt      run_scenarios.py:8255
+                    parser (version: 1.9.8)                                     
+           INFO     Filter: port 1883 or port 8883,        run_scenarios.py:8260
+                    Duration: 300s                                              
+No stopped containers
+ Network docker_mqtt-net Creating 
+ Network docker_mqtt-net Creating 
+ Network docker_mqtt-net Created 
+ Network docker_mqtt-net Created 
+ Container docker-token-issuer-1 Creating 
+ Container docker-authz-1 Creating 
+ Container docker-mosquitto-1 Creating 
+ Container docker-metrics-collector-1 Creating 
+ Container docker-iperf3-1 Creating 
+ Container docker-cadvisor-1 Creating 
+ Container docker-authz-1 Created 
+ Container docker-mosquitto-1 Created 
+ Container docker-cadvisor-1 Created 
+ Container docker-iperf3-1 Created 
+ Container docker-metrics-collector-1 Created 
+ Container docker-token-issuer-1 Created 
+ Container docker-authz-1 Starting 
+ Container docker-token-issuer-1 Starting 
+ Container docker-cadvisor-1 Starting 
+ Container docker-mosquitto-1 Starting 
+ Container docker-metrics-collector-1 Starting 
+ Container docker-iperf3-1 Starting 
+ Container docker-authz-1 Started 
+ Container docker-token-issuer-1 Started 
+ Container docker-cadvisor-1 Started 
+ Container docker-mosquitto-1 Started 
+ Container docker-metrics-collector-1 Started 
+ Container docker-iperf3-1 Started 
+ Container docker-netem-1 Creating 
+ Container docker-netem-1 Created 
+ Container docker-netem-1 Starting 
+ Container docker-netem-1 Started 
+[16:23:14] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8081/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8082/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=up                 
+                    "HTTP/1.1 200 OK"                                           
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A7dd7dbd0ede2.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A7dd7dbd0ede2.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[16:23:16] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A7dd7dbd0ede2.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A7dd7dbd0ede2.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[16:23:19] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A7dd7dbd0ede2.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A7dd7dbd0ede2.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[16:23:21] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A7dd7dbd0ede2.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A7dd7dbd0ede2.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[16:23:23] INFO     Running iperf3 baseline: 4 streams, 5s iperf3_baseline.py:63
+                    duration, reverse=True                                      
+[16:23:28] INFO     iperf3 baseline complete: 84427.68    iperf3_baseline.py:212
+                    Mbps, 0.00 ms RTT                                           
+           INFO     Network baseline: 84427.68 Mbps        run_scenarios.py:8554
+                    capacity confirmed                                          
+[16:23:30] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+[16:23:31] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=sum%28container_cpu_usage_seconds_total%7                
+                    Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%29&star                
+                    t=1790105006.173335&end=1790105011.923335&st                
+                    ep=0.25 "HTTP/1.1 200 OK"                                   
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28timestamp%28container_cpu_usage_sec                
+                    onds_total%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%2                
+                    2%7D%29%29&start=1790105006.173335&end=17901                
+                    05011.923335&step=0.25 "HTTP/1.1 200 OK"                    
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28container_memory_working_set_bytes%                
+                    7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%22%7D%29&sta                
+                    rt=1790105006.173335&end=1790105011.923335&s                
+                    tep=0.25 "HTTP/1.1 200 OK"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28timestamp%28container_memory_workin                
+                    g_set_bytes%7Bid%3D~%22.%2A7dd7dbd0ede2.%2A%                
+                    22%7D%29%29&start=1790105006.173335&end=1790                
+                    105011.923335&step=0.25 "HTTP/1.1 200 OK"                   
+           INFO     Wrote                                  run_scenarios.py:9419
+                    benchmarks/results/TOKEN-ACL-READ-FANO                      
+                    UT-EXPIRY-ONLY-BISCUIT-10.json                              
+[16:23:32] INFO     Summary written to                  aggregate_results.py:368
+                    /home/eagle/TCC2/mqtt-auth-biscuit/                         
+                    benchmarks/results/summary.json                             
+Cleaning up Docker services...

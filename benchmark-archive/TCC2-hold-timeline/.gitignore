@@ -1,0 +1,41 @@
+# Rust build artifacts
+/target/
+/mqtt-auth-biscuit/target/
+
+# Token files (if they are sensitive/temporary)
+/mqtt-auth-biscuit/*.txt
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+
+# Generated benchmark-host inventory
+/infra/ansible/inventory.yml
+
+# Artifacts
+mqtt-auth-biscuit/benchmarks/**.json
+
+# Generated TLS assets (see docker/tls/generate_certs.sh)
+/mqtt-auth-biscuit/docker/tls/*.pem
+/mqtt-auth-biscuit/docker/tls/*.key
+/mqtt-auth-biscuit/docker/tls/*.srl
+/mqtt-auth-biscuit/docker/tls/dynamic-security.json
+
+# Generated Mosquitto configs (benchmark matrix variants)
+/mqtt-auth-biscuit/docker/.generated/
+/mqtt-auth-biscuit/docker/tls/.generated/
+/mqtt-auth-biscuit/docker/sqlite/policy.db
+
+# benchmark results
+/mqtt-auth-biscuit/benchmarks/results/
+/mqtt-auth-biscuit/benchmarks/result*
+results-p*
+/combined-part1/
+/mqtt-auth-biscuit/benchmarks/combined-part1/

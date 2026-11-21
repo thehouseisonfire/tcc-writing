@@ -1,0 +1,1581 @@
+// authz-server2: Hyper 1.0 + Tower + tokio-rustls implementation
+// - Hyper 1.x HTTP/2-only server (no HTTP/1.1, no upgrades)
+// - Uses http-body-util for request body handling
+// - Lock-free config with arc-swap
+// - Strongly-typed enums for modes
+// - Graceful shutdown via Ctrl-C
+// - Per-connection semaphore for backpressure
+// - Fixed http2::Builder executor
+// - Simplified service with TowerToHyperService
+
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    env,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
+
+use arc_swap::ArcSwap;
+use base64::Engine as _;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{Method, Request, Response, StatusCode, body::Incoming, server::conn::http2};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use rustls::ServerConfig;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use serde::{Deserialize, Serialize};
+use tokio::{net::TcpListener, sync::Semaphore, task};
+use tokio_rustls::TlsAcceptor;
+use tracing::{debug, error, info, warn};
+
+// ------------------- Config types -------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+enum FailMode {
+    #[default]
+    None,
+    Always,
+    Rate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum PolicyProfile {
+    Simple,
+    Med,
+    Complex,
+    #[default]
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum JwtIdentityBindingMode {
+    #[default]
+    Off,
+    Strict,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum RuleEffect {
+    #[default]
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Eq, PartialEq)]
+struct Rule {
+    effect: RuleEffect,
+    #[serde(default)]
+    ops: Vec<String>,
+    #[serde(default)]
+    topics: Vec<String>,
+    #[serde(default)]
+    client_ids: Vec<String>,
+    #[serde(default)]
+    roles: Vec<String>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AppConfig {
+    delay_ms: u64,
+    fail_mode: FailMode,
+    fail_rate: f64,
+    #[serde(default)]
+    authz_profile: PolicyProfile,
+    #[serde(default)]
+    rules: Vec<Rule>,
+    #[serde(default)]
+    client_roles: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    jwt_identity_binding: JwtIdentityBindingMode,
+    max_conns: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            delay_ms: 0,
+            fail_mode: FailMode::None,
+            fail_rate: 0.0,
+            authz_profile: PolicyProfile::Custom,
+            rules: Vec::new(),
+            client_roles: HashMap::new(),
+            jwt_identity_binding: JwtIdentityBindingMode::Off,
+            max_conns: 1024,
+        }
+    }
+}
+
+impl AppConfig {
+    fn from_env() -> Result<Self, String> {
+        let delay_ms = env::var("AUTHZ_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+
+        let fail_mode = env::var("AUTHZ_FAIL_MODE")
+            .ok()
+            .and_then(|s| match s.to_ascii_lowercase().as_str() {
+                "none" => Some(FailMode::None),
+                "always" => Some(FailMode::Always),
+                "rate" => Some(FailMode::Rate),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let fail_rate = env::var("AUTHZ_FAIL_RATE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0);
+
+        let authz_profile = env::var("AUTHZ_PROFILE")
+            .ok()
+            .and_then(|s| match s.to_ascii_lowercase().as_str() {
+                "simple" => Some(PolicyProfile::Simple),
+                "med" => Some(PolicyProfile::Med),
+                "complex" => Some(PolicyProfile::Complex),
+                "custom" => Some(PolicyProfile::Custom),
+                _ => None,
+            })
+            .unwrap_or(PolicyProfile::Custom);
+
+        let jwt_identity_binding = match env::var("AUTHZ_JWT_IDENTITY_BINDING") {
+            Ok(value) => parse_jwt_identity_binding_mode(&value)?,
+            Err(_) => JwtIdentityBindingMode::Off,
+        };
+
+        let max_conns = env::var("AUTHZ_MAX_CONNS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1024);
+
+        Ok(Self {
+            delay_ms,
+            fail_mode,
+            fail_rate,
+            authz_profile,
+            rules: Vec::new(),
+            client_roles: HashMap::new(),
+            jwt_identity_binding,
+            max_conns,
+        })
+    }
+}
+
+fn parse_jwt_identity_binding_mode(value: &str) -> Result<JwtIdentityBindingMode, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "off" => Ok(JwtIdentityBindingMode::Off),
+        "strict" => Ok(JwtIdentityBindingMode::Strict),
+        _ => Err(format!(
+            "invalid AUTHZ_JWT_IDENTITY_BINDING '{value}'; use 'off' or 'strict'"
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ConfigUpdate {
+    delay_ms: Option<u64>,
+    fail_mode: Option<FailMode>,
+    fail_rate: Option<f64>,
+    authz_profile: Option<PolicyProfile>,
+    rules: Option<Vec<Rule>>,
+    client_roles: Option<HashMap<String, Vec<String>>>,
+    jwt_identity_binding: Option<JwtIdentityBindingMode>,
+}
+
+fn apply_config_update(next: &mut AppConfig, update: ConfigUpdate) {
+    if let Some(v) = update.delay_ms {
+        next.delay_ms = v;
+    }
+    if let Some(v) = update.fail_mode {
+        next.fail_mode = v;
+    }
+    if let Some(v) = update.fail_rate {
+        next.fail_rate = v;
+    }
+    if let Some(v) = update.authz_profile {
+        next.authz_profile = v;
+    }
+    if let Some(v) = update.rules {
+        next.rules = v;
+    }
+    if let Some(v) = update.client_roles {
+        next.client_roles = v;
+    }
+    if let Some(v) = update.jwt_identity_binding {
+        next.jwt_identity_binding = v;
+    }
+}
+
+fn config_summary_body(next: &AppConfig) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "delay_ms": next.delay_ms,
+        "fail_mode": next.fail_mode,
+        "fail_rate": next.fail_rate,
+        "authz_profile": next.authz_profile,
+        "rules_count": effective_rules(next).len(),
+        "client_roles_count": next.client_roles.len(),
+        "jwt_identity_binding": next.jwt_identity_binding,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthRequest {
+    #[serde(default)]
+    client_id: String,
+    #[serde(default)]
+    topic: String,
+    #[serde(default)]
+    access: i32,
+    token: Option<String>,
+}
+
+struct AppState {
+    config: Arc<ArcSwap<AppConfig>>,
+    baseline_config: Arc<AppConfig>,
+    conn_sema: Arc<Semaphore>,
+    max_conns: usize,
+    stats: Arc<AuthzStats>,
+}
+
+#[derive(Debug, Default)]
+struct AuthzStats {
+    requests: AtomicU64,
+    injected_failures: AtomicU64,
+    policy_allows: AtomicU64,
+    policy_denies: AtomicU64,
+    rules_examined: AtomicU64,
+    profile_simple: AtomicU64,
+    profile_med: AtomicU64,
+    profile_complex: AtomicU64,
+    profile_custom: AtomicU64,
+}
+
+impl AuthzStats {
+    fn reset(&self) {
+        self.requests.store(0, Ordering::Release);
+        self.injected_failures.store(0, Ordering::Release);
+        self.policy_allows.store(0, Ordering::Release);
+        self.policy_denies.store(0, Ordering::Release);
+        self.rules_examined.store(0, Ordering::Release);
+        self.profile_simple.store(0, Ordering::Release);
+        self.profile_med.store(0, Ordering::Release);
+        self.profile_complex.store(0, Ordering::Release);
+        self.profile_custom.store(0, Ordering::Release);
+    }
+
+    fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "requests": self.requests.load(Ordering::Acquire),
+            "injected_failures": self.injected_failures.load(Ordering::Acquire),
+            "policy_allows": self.policy_allows.load(Ordering::Acquire),
+            "policy_denies": self.policy_denies.load(Ordering::Acquire),
+            "rules_examined": self.rules_examined.load(Ordering::Acquire),
+            "profile_requests": {
+                "simple": self.profile_simple.load(Ordering::Acquire),
+                "med": self.profile_med.load(Ordering::Acquire),
+                "complex": self.profile_complex.load(Ordering::Acquire),
+                "custom": self.profile_custom.load(Ordering::Acquire),
+            },
+        })
+    }
+
+    fn record_profile(&self, profile: &PolicyProfile) {
+        let counter = match profile {
+            PolicyProfile::Simple => &self.profile_simple,
+            PolicyProfile::Med => &self.profile_med,
+            PolicyProfile::Complex => &self.profile_complex,
+            PolicyProfile::Custom => &self.profile_custom,
+        };
+        counter.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+fn stats_snapshot(state: &AppState) -> serde_json::Value {
+    let mut snapshot = state.stats.snapshot();
+    let config = state.config.load();
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert("configured_delay_ms".into(), config.delay_ms.into());
+        object.insert(
+            "configured_fail_mode".into(),
+            serde_json::to_value(&config.fail_mode).expect("fail mode is serializable"),
+        );
+        object.insert("configured_fail_rate".into(), config.fail_rate.into());
+        object.insert(
+            "configured_profile".into(),
+            serde_json::to_value(&config.authz_profile).expect("profile is serializable"),
+        );
+    }
+    snapshot
+}
+
+impl Clone for AppState {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            baseline_config: self.baseline_config.clone(),
+            conn_sema: self.conn_sema.clone(),
+            max_conns: self.max_conns,
+            stats: self.stats.clone(),
+        }
+    }
+}
+
+fn deterministic_rate_failure(request_ordinal: u64, rate: f64) -> bool {
+    let rate = rate.clamp(0.0, 1.0);
+    if rate == 0.0 {
+        return false;
+    }
+    if rate == 1.0 {
+        return true;
+    }
+    let current = ((request_ordinal as f64) * rate + f64::EPSILON).floor();
+    let previous = (((request_ordinal - 1) as f64) * rate + f64::EPSILON).floor();
+    current > previous
+}
+
+// ------------------- Utilities -------------------
+
+fn json_response_bytes(status: StatusCode, bytes: Bytes) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(Full::new(bytes))
+        .unwrap()
+}
+
+fn json_response<T: Serialize>(status: StatusCode, payload: &T) -> Response<Full<Bytes>> {
+    serde_json::to_vec(payload).map_or_else(
+        |_| json_response_bytes(StatusCode::INTERNAL_SERVER_ERROR, Bytes::from_static(b"{}")),
+        |body| json_response_bytes(status, Bytes::from(body)),
+    )
+}
+
+const fn access_to_operation(access: i32) -> &'static str {
+    if (access & 0x02) != 0 {
+        "publish"
+    } else if (access & 0x04) != 0 {
+        "subscribe"
+    } else if (access & 0x08) != 0 {
+        "control"
+    } else {
+        "read"
+    }
+}
+
+fn is_valid_filter(filter: &str) -> bool {
+    let mut saw_hash = false;
+    let parts: Vec<&str> = filter.split('/').collect();
+    for (idx, part) in parts.iter().enumerate() {
+        if part.contains('#') {
+            if *part != "#" || saw_hash || idx != parts.len() - 1 {
+                return false;
+            }
+            saw_hash = true;
+            continue;
+        }
+        if part.contains('+') && *part != "+" {
+            return false;
+        }
+    }
+    true
+}
+
+fn topic_matches(filter: &str, topic: &str) -> bool {
+    if !is_valid_filter(filter) {
+        return false;
+    }
+    if filter == "#" {
+        return true;
+    }
+
+    let filter_parts: Vec<&str> = filter.split('/').collect();
+    let topic_parts: Vec<&str> = topic.split('/').collect();
+    let mut i = 0;
+
+    while i < filter_parts.len() {
+        let fp = filter_parts[i];
+        if fp == "#" {
+            return true;
+        }
+        if i >= topic_parts.len() {
+            return false;
+        }
+        if fp != "+" && fp != topic_parts[i] {
+            return false;
+        }
+        i += 1;
+    }
+
+    i == topic_parts.len()
+}
+
+fn make_rule(
+    effect: RuleEffect,
+    ops: &[&str],
+    topics: &[&str],
+    client_ids: &[&str],
+    roles: &[&str],
+    id: &str,
+) -> Rule {
+    Rule {
+        effect,
+        ops: ops.iter().map(std::string::ToString::to_string).collect(),
+        topics: topics
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+        client_ids: client_ids
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
+        roles: roles.iter().map(std::string::ToString::to_string).collect(),
+        id: Some(id.to_string()),
+    }
+}
+
+fn simple_profile_rules() -> Vec<Rule> {
+    vec![
+        make_rule(
+            RuleEffect::Deny,
+            &["control"],
+            &["#"],
+            &[],
+            &[],
+            "simple_deny_control",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["publish", "subscribe", "read"],
+            &["sensors/+/temp"],
+            &[],
+            &[],
+            "simple_allow_sensor_temp",
+        ),
+    ]
+}
+
+fn med_profile_rules() -> Vec<Rule> {
+    vec![
+        make_rule(
+            RuleEffect::Deny,
+            &["publish", "subscribe", "read"],
+            &["sensors/+/private/#"],
+            &[],
+            &[],
+            "med_deny_private_tree",
+        ),
+        make_rule(
+            RuleEffect::Deny,
+            &["read"],
+            &["sensors/+/temp/raw"],
+            &[],
+            &[],
+            "med_deny_raw_read",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["publish"],
+            &["devices/+/status"],
+            &[],
+            &["writer", "admin"],
+            "med_allow_role_device_publish",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["subscribe", "read"],
+            &["devices/+/status"],
+            &[],
+            &["reader", "admin"],
+            "med_allow_role_device_read",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["publish"],
+            &["sensors/+/temp"],
+            &[],
+            &[],
+            "med_allow_sensor_publish",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["subscribe", "read"],
+            &["sensors/+/temp"],
+            &[],
+            &[],
+            "med_allow_sensor_read",
+        ),
+    ]
+}
+
+fn complex_profile_rules() -> Vec<Rule> {
+    vec![
+        make_rule(
+            RuleEffect::Deny,
+            &["publish", "subscribe", "read"],
+            &["sensors/+/private/#"],
+            &[],
+            &[],
+            "complex_deny_private_tree",
+        ),
+        make_rule(
+            RuleEffect::Deny,
+            &["publish", "subscribe", "read"],
+            &["sensors/+/restricted/#"],
+            &["blocked_client", "revoked_client"],
+            &[],
+            "complex_deny_blocked_clients",
+        ),
+        make_rule(
+            RuleEffect::Deny,
+            &["control"],
+            &["$CONTROL/#"],
+            &[],
+            &["observer", "reader"],
+            "complex_deny_control_readers",
+        ),
+        make_rule(
+            RuleEffect::Deny,
+            &["read"],
+            &["sensors/+/temp/raw"],
+            &[],
+            &[],
+            "complex_deny_raw_read",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["control"],
+            &["$CONTROL/#"],
+            &[],
+            &["admin"],
+            "complex_allow_control_admin",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["publish"],
+            &["devices/+/status"],
+            &[],
+            &["writer", "admin"],
+            "complex_allow_role_device_publish",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["subscribe", "read"],
+            &["devices/+/status", "alerts/#"],
+            &[],
+            &["reader", "admin"],
+            "complex_allow_role_device_read",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["publish", "subscribe", "read"],
+            &["sensors/+/temp"],
+            &[],
+            &[],
+            "complex_allow_sensor_temp",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["publish"],
+            &["telemetry/+/events/#"],
+            &["client_1", "client_2", "client_3"],
+            &[],
+            "complex_allow_selected_clients_telemetry",
+        ),
+        make_rule(
+            RuleEffect::Allow,
+            &["subscribe", "read"],
+            &["telemetry/+/events/#"],
+            &["client_1", "client_2", "client_3"],
+            &["observer", "admin"],
+            "complex_allow_selected_clients_observer",
+        ),
+    ]
+}
+
+fn effective_rules(cfg: &AppConfig) -> Vec<Rule> {
+    let mut rules = match cfg.authz_profile {
+        PolicyProfile::Simple => simple_profile_rules(),
+        PolicyProfile::Med => med_profile_rules(),
+        PolicyProfile::Complex => complex_profile_rules(),
+        PolicyProfile::Custom => Vec::new(),
+    };
+    rules.extend(cfg.rules.clone());
+    rules
+}
+
+#[derive(Debug, Deserialize)]
+struct JwtClaimsLite {
+    roles: Option<Vec<String>>,
+    client_id: Option<String>,
+    sub: Option<String>,
+}
+
+fn resolve_jwt_effective_identity(claims: &JwtClaimsLite) -> Option<Result<&str, ()>> {
+    let sub = claims.sub.as_deref().filter(|v| !v.is_empty());
+    let client_id = claims.client_id.as_deref().filter(|v| !v.is_empty());
+
+    match (sub, client_id) {
+        (Some(sub), Some(client_id)) if sub != client_id => Some(Err(())),
+        (Some(sub), Some(_) | None) => Some(Ok(sub)),
+        (None, Some(client_id)) => Some(Ok(client_id)),
+        (None, None) => None,
+    }
+}
+
+fn extract_token_roles(
+    token: &str,
+    expected_client_id: &str,
+    binding_mode: &JwtIdentityBindingMode,
+) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let mut parts = token.split('.');
+    let _header = parts.next();
+    let Some(payload) = parts.next() else {
+        return out;
+    };
+
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload));
+    let Ok(payload_bytes) = decoded else {
+        return out;
+    };
+    let Ok(claims) = serde_json::from_slice::<JwtClaimsLite>(&payload_bytes) else {
+        return out;
+    };
+
+    if *binding_mode == JwtIdentityBindingMode::Strict {
+        let Some(identity_result) = resolve_jwt_effective_identity(&claims) else {
+            return out;
+        };
+        let Ok(token_client) = identity_result else {
+            return out;
+        };
+        if !expected_client_id.is_empty() && token_client != expected_client_id {
+            return out;
+        }
+    }
+
+    for role in claims.roles.unwrap_or_default() {
+        let normalized = role.trim().to_ascii_lowercase();
+        if !normalized.is_empty() {
+            out.insert(normalized);
+        }
+    }
+    out
+}
+
+#[derive(Debug)]
+struct EvalContext<'a> {
+    operation: &'a str,
+    topic: &'a str,
+    client_id: &'a str,
+    roles: &'a HashSet<String>,
+}
+
+fn rule_matches(rule: &Rule, ctx: &EvalContext<'_>) -> bool {
+    if !rule.ops.is_empty()
+        && !rule
+            .ops
+            .iter()
+            .any(|op| op.trim().eq_ignore_ascii_case(ctx.operation))
+    {
+        return false;
+    }
+    if !rule.topics.is_empty()
+        && !rule
+            .topics
+            .iter()
+            .any(|f| topic_matches(f.trim(), ctx.topic))
+    {
+        return false;
+    }
+    if !rule.client_ids.is_empty()
+        && !rule
+            .client_ids
+            .iter()
+            .any(|id| id.trim().eq_ignore_ascii_case(ctx.client_id))
+    {
+        return false;
+    }
+    if !rule.roles.is_empty()
+        && !rule
+            .roles
+            .iter()
+            .map(|r| r.trim().to_ascii_lowercase())
+            .any(|r| ctx.roles.contains(&r))
+    {
+        return false;
+    }
+    true
+}
+
+fn evaluate_rules(rules: &[Rule], ctx: &EvalContext<'_>) -> bool {
+    evaluate_rules_observed(rules, ctx).0
+}
+
+fn evaluate_rules_observed(rules: &[Rule], ctx: &EvalContext<'_>) -> (bool, u64) {
+    let mut examined = 0;
+    if rules
+        .iter()
+        .filter(|rule| rule.effect == RuleEffect::Deny)
+        .any(|rule| {
+            examined += 1;
+            rule_matches(rule, ctx)
+        })
+    {
+        return (false, examined);
+    }
+    let allowed = rules
+        .iter()
+        .filter(|rule| rule.effect == RuleEffect::Allow)
+        .any(|rule| {
+            examined += 1;
+            rule_matches(rule, ctx)
+        });
+    (allowed, examined)
+}
+
+fn evaluate_authorization(cfg: &AppConfig, req: &AuthRequest) -> bool {
+    evaluate_authorization_observed(cfg, req).0
+}
+
+fn evaluate_authorization_observed(cfg: &AppConfig, req: &AuthRequest) -> (bool, u64) {
+    let operation = access_to_operation(req.access);
+    let mut effective_roles = HashSet::new();
+    if let Some(role_list) = cfg.client_roles.get(req.client_id.trim()) {
+        for role in role_list {
+            let normalized = role.trim().to_ascii_lowercase();
+            if !normalized.is_empty() {
+                effective_roles.insert(normalized);
+            }
+        }
+    }
+    if let Some(token) = req.token.as_deref() {
+        effective_roles.extend(extract_token_roles(
+            token,
+            req.client_id.trim(),
+            &cfg.jwt_identity_binding,
+        ));
+    }
+
+    let policy_rules = effective_rules(cfg);
+    let ctx = EvalContext {
+        operation,
+        topic: req.topic.trim(),
+        client_id: req.client_id.trim(),
+        roles: &effective_roles,
+    };
+    evaluate_rules_observed(&policy_rules, &ctx)
+}
+
+// ------------------- Request handler -------------------
+
+async fn handle(
+    req: Request<Incoming>,
+    state: AppState,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+
+    match (method, path.as_str()) {
+        (Method::GET, "/health") => {
+            let body = serde_json::json!({"ok": true});
+            Ok(json_response(StatusCode::OK, &body))
+        }
+
+        (Method::GET, "/stats") => Ok(json_response(StatusCode::OK, &stats_snapshot(&state))),
+
+        (Method::POST, "/stats/reset") => {
+            state.stats.reset();
+            Ok(json_response(StatusCode::OK, &stats_snapshot(&state)))
+        }
+
+        (Method::POST, "/config") => {
+            // collect body
+            let collected = match req.into_body().collect().await {
+                Ok(full) => full,
+                Err(e) => {
+                    error!(%e, "failed reading body");
+                    let body = serde_json::json!({"error": "invalid body"});
+                    return Ok(json_response(StatusCode::BAD_REQUEST, &body));
+                }
+            };
+
+            let bytes = collected.to_bytes();
+
+            let update: ConfigUpdate = match serde_json::from_slice(&bytes) {
+                Ok(u) => u,
+                Err(e) => {
+                    error!(%e, "invalid json for config update");
+                    let body = serde_json::json!({"error": "invalid json"});
+                    return Ok(json_response(StatusCode::BAD_REQUEST, &body));
+                }
+            };
+
+            let current = state.config.load_full();
+            let mut next = (*current).clone();
+            apply_config_update(&mut next, update);
+
+            state.config.store(Arc::new(next.clone()));
+            state.stats.reset();
+            let body = config_summary_body(&next);
+
+            Ok(json_response(StatusCode::OK, &body))
+        }
+
+        (Method::POST, "/config/reset") => {
+            let next = (*state.baseline_config).clone();
+            state.config.store(Arc::new(next.clone()));
+            state.stats.reset();
+            let body = config_summary_body(&next);
+            Ok(json_response(StatusCode::OK, &body))
+        }
+
+        (Method::POST, "/authorize") => {
+            let request_ordinal = state.stats.requests.fetch_add(1, Ordering::AcqRel) + 1;
+            let collected = match req.into_body().collect().await {
+                Ok(full) => full,
+                Err(e) => {
+                    error!(%e, "failed reading body");
+                    let body = serde_json::json!({"error": "invalid body"});
+                    return Ok(json_response(StatusCode::BAD_REQUEST, &body));
+                }
+            };
+
+            let bytes = collected.to_bytes();
+
+            let ar: AuthRequest = match serde_json::from_slice(&bytes) {
+                Ok(r) => r,
+                Err(e) => {
+                    error!(%e, "invalid auth request json");
+                    let body = serde_json::json!({"error": "invalid json"});
+                    return Ok(json_response(StatusCode::BAD_REQUEST, &body));
+                }
+            };
+
+            // Snapshot config
+            let cfg_arc = state.config.load();
+            let cfg = cfg_arc.as_ref().clone();
+
+            // Apply async delay
+            if cfg.delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(cfg.delay_ms)).await;
+            }
+
+            // Fail mode handling
+            match cfg.fail_mode {
+                FailMode::Always => {
+                    state.stats.injected_failures.fetch_add(1, Ordering::AcqRel);
+                    warn!("forced failure");
+                    let body = serde_json::json!({"allow": false, "error": "forced failure"});
+                    return Ok(json_response(StatusCode::SERVICE_UNAVAILABLE, &body));
+                }
+                FailMode::Rate => {
+                    if deterministic_rate_failure(request_ordinal, cfg.fail_rate) {
+                        state.stats.injected_failures.fetch_add(1, Ordering::AcqRel);
+                        warn!(%request_ordinal, "deterministic rate failure triggered");
+                        let body = serde_json::json!({"allow": false, "error": "random failure"});
+                        return Ok(json_response(StatusCode::SERVICE_UNAVAILABLE, &body));
+                    }
+                }
+                FailMode::None => {}
+            }
+
+            // Authorization logic
+            let (allowed, rules_examined) = evaluate_authorization_observed(&cfg, &ar);
+            state
+                .stats
+                .rules_examined
+                .fetch_add(rules_examined, Ordering::AcqRel);
+            state.stats.record_profile(&cfg.authz_profile);
+            if allowed {
+                state.stats.policy_allows.fetch_add(1, Ordering::AcqRel);
+            } else {
+                state.stats.policy_denies.fetch_add(1, Ordering::AcqRel);
+            }
+
+            debug!(
+                topic = %ar.topic,
+                client_id = %ar.client_id,
+                access = ar.access,
+                operation = access_to_operation(ar.access),
+                profile = ?cfg.authz_profile,
+                allowed = allowed,
+                "authorize"
+            );
+
+            let body = serde_json::json!({"allow": allowed});
+            Ok(json_response(StatusCode::OK, &body))
+        }
+
+        _ => {
+            let body = serde_json::json!({"error": "not found"});
+            Ok(json_response(StatusCode::NOT_FOUND, &body))
+        }
+    }
+}
+
+// ------------------- TLS helpers -------------------
+
+fn load_certs_and_key(
+    cert_path: &PathBuf,
+    key_path: &PathBuf,
+) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+    let certs = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS cert: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS cert: {e}"))?;
+    if certs.is_empty() {
+        anyhow::bail!("no TLS certificates found");
+    }
+    let key = PrivateKeyDer::from_pem_file(key_path)
+        .map_err(|e| anyhow::anyhow!("failed to parse TLS key: {e}"))?;
+
+    Ok((certs, key))
+}
+
+fn make_rustls_config(
+    certs: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+) -> anyhow::Result<ServerConfig> {
+    let mut cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Ok(cfg)
+}
+
+// ------------------- Main -------------------
+
+#[tokio::main]
+#[allow(clippy::too_many_lines)]
+async fn main() -> anyhow::Result<()> {
+    let log_level = env::var("AUTHZ_LOG").unwrap_or_else(|_| "warn".to_string());
+    tracing_subscriber::fmt().with_env_filter(log_level).init();
+
+    info!("starting authz-server (hyper 1.x)");
+
+    let host = env::var("AUTHZ_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = env::var("AUTHZ_PORT").unwrap_or_else(|_| "8081".to_string());
+    let addr: SocketAddr = format!("{host}:{port}").parse()?;
+
+    let shared_config = match AppConfig::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("authz-server config error: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    let state = AppState {
+        config: Arc::new(ArcSwap::from_pointee(shared_config.clone())),
+        baseline_config: Arc::new(shared_config.clone()),
+        conn_sema: Arc::new(Semaphore::new(shared_config.max_conns)),
+        max_conns: shared_config.max_conns,
+        stats: Arc::new(AuthzStats::default()),
+    };
+
+    let use_tls = env::var("AUTHZ_TLS").unwrap_or_else(|_| "0".to_string());
+    let use_tls = matches!(use_tls.as_str(), "1" | "true" | "TRUE");
+
+    // Graceful shutdown signal
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let shutdown_signal = async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl-c handler");
+        let _ = shutdown_tx.try_send(());
+    };
+
+    tokio::spawn(shutdown_signal);
+
+    if use_tls {
+        info!(%addr, "listening with TLS + HTTP/2");
+
+        let cert_path = env::var("AUTHZ_TLS_CERT").expect("AUTHZ_TLS_CERT missing");
+        let key_path = env::var("AUTHZ_TLS_KEY").expect("AUTHZ_TLS_KEY missing");
+
+        let (certs, key) = load_certs_and_key(&PathBuf::from(cert_path), &PathBuf::from(key_path))?;
+        let rustls_cfg = make_rustls_config(certs, key)?;
+        let acceptor = TlsAcceptor::from(Arc::new(rustls_cfg));
+
+        let listener = TcpListener::bind(addr).await?;
+
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    info!("shutdown requested");
+                    break;
+                }
+                accept_res = listener.accept() => {
+                    let (stream, peer) = match accept_res {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(%e, "accept failed");
+                            continue;
+                        }
+                    };
+
+                    let Ok(permit) = state.conn_sema.clone().acquire_owned().await else {
+                        warn!("semaphore closed");
+                        continue;
+                    };
+
+                    let acceptor = acceptor.clone();
+                    let state_clone = state.clone();
+
+                    task::spawn(async move {
+                        let _permit = permit; // hold permit for lifetime of connection
+                        let accept_result = acceptor.accept(stream).await;
+                        match accept_result {
+                            Ok(tls_stream) => {
+                                let executor = TokioExecutor::new();
+                                let mut builder = http2::Builder::new(executor);
+                                builder.max_concurrent_streams(256);
+                                builder.initial_connection_window_size(1024 * 1024);
+                                builder.initial_stream_window_size(1024 * 1024);
+                                let tls_io = TokioIo::new(tls_stream);
+                                let service = hyper::service::service_fn(move |req: Request<Incoming>| {
+                                    let state = state_clone.clone();
+                                    async move { handle(req, state).await }
+                                });
+                                let serve_result = builder.serve_connection(tls_io, service).await;
+                                if let Err(e) = serve_result {
+                                    warn!(%e, "tls h2 connection errored for {}", peer);
+                                }
+                            }
+                            Err(e) => {
+                                warn!(%e, "tls handshake failed for {}", peer);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+    } else {
+        info!(%addr, "listening with h2c prior-knowledge (no TLS)");
+
+        let listener = TcpListener::bind(addr).await?;
+
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.recv() => {
+                    info!("shutdown requested");
+                    break;
+                }
+                accept_res = listener.accept() => {
+                    let (stream, peer) = match accept_res {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(%e, "accept failed");
+                            continue;
+                        }
+                    };
+
+                    let Ok(permit) = state.conn_sema.clone().acquire_owned().await else {
+                        warn!("semaphore closed");
+                        continue;
+                    };
+
+                    let state_clone = state.clone();
+
+                    task::spawn(async move {
+                        let _permit = permit; // hold permit for lifetime of connection
+                        let executor = TokioExecutor::new();
+                        let mut builder = http2::Builder::new(executor);
+                        builder.max_concurrent_streams(256);
+                        builder.initial_connection_window_size(1024 * 1024);
+                        builder.initial_stream_window_size(1024 * 1024);
+                        let stream_io = TokioIo::new(stream);
+                        let service = hyper::service::service_fn(move |req: Request<Incoming>| {
+                            let state = state_clone.clone();
+                            async move { handle(req, state).await }
+                        });
+                        let serve_result = builder.serve_connection(stream_io, service).await;
+                        if let Err(e) = serve_result {
+                            warn!(%e, "h2c connection errored for {}", peer);
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    info!("shutting down");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observed_rule_evaluation_counts_profile_work() {
+        let mut cfg = AppConfig {
+            authz_profile: PolicyProfile::Simple,
+            ..AppConfig::default()
+        };
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "sensors/client_1/temp".to_string(),
+            access: 2,
+            token: None,
+        };
+        let (allowed, simple_examined) = evaluate_authorization_observed(&cfg, &req);
+        assert!(allowed);
+        assert!(simple_examined > 0);
+
+        cfg.authz_profile = PolicyProfile::Complex;
+        let (allowed, complex_examined) = evaluate_authorization_observed(&cfg, &req);
+        assert!(allowed);
+        assert!(complex_examined > simple_examined);
+    }
+
+    #[test]
+    fn deterministic_failure_rate_has_exact_ordinals() {
+        let one_percent = (1..=250)
+            .filter(|ordinal| deterministic_rate_failure(*ordinal, 0.01))
+            .collect::<Vec<_>>();
+        assert_eq!(one_percent, vec![100, 200]);
+        let five_percent = (1..=50)
+            .filter(|ordinal| deterministic_rate_failure(*ordinal, 0.05))
+            .collect::<Vec<_>>();
+        assert_eq!(five_percent, vec![20, 40]);
+    }
+    use std::env;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn with_env_var<R>(key: &str, value: Option<&str>, f: impl FnOnce() -> R) -> R {
+        let _guard = env_lock().lock().expect("env lock should acquire");
+        let previous = env::var(key).ok();
+        match value {
+            Some(value) => {
+                // SAFETY: tests serialize all environment mutation through env_lock.
+                unsafe { env::set_var(key, value) };
+            }
+            None => {
+                // SAFETY: tests serialize all environment mutation through env_lock.
+                unsafe { env::remove_var(key) };
+            }
+        }
+
+        let result = f();
+
+        match previous.as_deref() {
+            Some(previous) => {
+                // SAFETY: tests serialize all environment mutation through env_lock.
+                unsafe { env::set_var(key, previous) };
+            }
+            None => {
+                // SAFETY: tests serialize all environment mutation through env_lock.
+                unsafe { env::remove_var(key) };
+            }
+        }
+
+        result
+    }
+
+    fn base_cfg() -> AppConfig {
+        AppConfig::default()
+    }
+
+    fn make_token(payload: &serde_json::Value) -> String {
+        let header = serde_json::json!({"alg":"none","typ":"JWT"});
+        let h = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&header).expect("header json"));
+        let p = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(payload).expect("payload json"));
+        format!("{h}.{p}.signature")
+    }
+
+    #[test]
+    fn operation_mapping_matches_plugin_priority() {
+        assert_eq!(access_to_operation(0x01), "read");
+        assert_eq!(access_to_operation(0x02), "publish");
+        assert_eq!(access_to_operation(0x04), "subscribe");
+        assert_eq!(access_to_operation(0x08), "control");
+        assert_eq!(access_to_operation(0x02 | 0x04), "publish");
+        assert_eq!(access_to_operation(0x04 | 0x08), "subscribe");
+        assert_eq!(access_to_operation(0x08 | 0x01), "control");
+    }
+
+    #[test]
+    fn topic_match_honors_wildcards_and_invalid_filters() {
+        assert!(topic_matches("sensors/+/temp", "sensors/client_1/temp"));
+        assert!(topic_matches("sensors/#", "sensors/client_1/temp"));
+        assert!(!topic_matches("sensors/#/temp", "sensors/client_1/temp"));
+        assert!(!topic_matches(
+            "sensors/+/temp",
+            "sensors/client_1/temp/extra"
+        ));
+    }
+
+    #[test]
+    fn deny_overrides_allow() {
+        let rules = vec![
+            make_rule(
+                RuleEffect::Allow,
+                &["publish"],
+                &["sensors/+/temp"],
+                &[],
+                &[],
+                "allow",
+            ),
+            make_rule(
+                RuleEffect::Deny,
+                &["publish"],
+                &["sensors/client_1/temp"],
+                &[],
+                &[],
+                "deny",
+            ),
+        ];
+        let active_roles = HashSet::new();
+        let ctx = EvalContext {
+            operation: "publish",
+            topic: "sensors/client_1/temp",
+            client_id: "client_1",
+            roles: &active_roles,
+        };
+        assert!(!evaluate_rules(&rules, &ctx));
+    }
+
+    #[test]
+    fn rule_supports_client_id_constraints() {
+        let rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["publish"],
+            &["sensors/+/temp"],
+            &["client_7"],
+            &[],
+            "allow_client7",
+        )];
+        let active_roles = HashSet::new();
+        let allow_ctx = EvalContext {
+            operation: "publish",
+            topic: "sensors/client_7/temp",
+            client_id: "client_7",
+            roles: &active_roles,
+        };
+        let deny_ctx = EvalContext {
+            operation: "publish",
+            topic: "sensors/client_8/temp",
+            client_id: "client_8",
+            roles: &active_roles,
+        };
+        assert!(evaluate_rules(&rules, &allow_ctx));
+        assert!(!evaluate_rules(&rules, &deny_ctx));
+    }
+
+    #[test]
+    fn token_roles_are_extracted_and_applied() {
+        let token = make_token(&serde_json::json!({
+            "sub": "client_1",
+            "roles": ["reader"]
+        }));
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: Some(token),
+        };
+        assert!(evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn parse_jwt_identity_binding_mode_accepts_off() {
+        assert_eq!(
+            parse_jwt_identity_binding_mode("off").expect("mode should parse"),
+            JwtIdentityBindingMode::Off
+        );
+    }
+
+    #[test]
+    fn parse_jwt_identity_binding_mode_accepts_strict() {
+        assert_eq!(
+            parse_jwt_identity_binding_mode("strict").expect("mode should parse"),
+            JwtIdentityBindingMode::Strict
+        );
+    }
+
+    #[test]
+    fn parse_jwt_identity_binding_mode_rejects_invalid_values() {
+        let err = parse_jwt_identity_binding_mode("typo").expect_err("mode should fail");
+        assert!(err.contains("AUTHZ_JWT_IDENTITY_BINDING"));
+    }
+
+    #[test]
+    fn from_env_defaults_jwt_identity_binding_to_off() {
+        with_env_var("AUTHZ_JWT_IDENTITY_BINDING", None, || {
+            let cfg = AppConfig::from_env().expect("config should parse");
+            assert_eq!(cfg.jwt_identity_binding, JwtIdentityBindingMode::Off);
+        });
+    }
+
+    #[test]
+    fn from_env_reads_strict_jwt_identity_binding() {
+        with_env_var("AUTHZ_JWT_IDENTITY_BINDING", Some("strict"), || {
+            let cfg = AppConfig::from_env().expect("config should parse");
+            assert_eq!(cfg.jwt_identity_binding, JwtIdentityBindingMode::Strict);
+        });
+    }
+
+    #[test]
+    fn from_env_rejects_invalid_jwt_identity_binding() {
+        with_env_var("AUTHZ_JWT_IDENTITY_BINDING", Some("strict_typo"), || {
+            let err = AppConfig::from_env().expect_err("config should fail");
+            assert!(err.contains("AUTHZ_JWT_IDENTITY_BINDING"));
+        });
+    }
+
+    #[test]
+    fn token_roles_are_accepted_when_binding_is_off_even_if_client_mismatches() {
+        let token = make_token(&serde_json::json!({
+            "sub": "client_2",
+            "roles": ["reader"]
+        }));
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: Some(token),
+        };
+        assert!(evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn token_roles_are_ignored_when_client_binding_mismatches_in_strict_mode() {
+        let token = make_token(&serde_json::json!({
+            "sub": "client_2",
+            "roles": ["reader"]
+        }));
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.jwt_identity_binding = JwtIdentityBindingMode::Strict;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: Some(token),
+        };
+        assert!(!evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn token_roles_use_client_id_claim_when_strict_identity_lacks_sub() {
+        let token = make_token(&serde_json::json!({
+            "client_id": "client_1",
+            "roles": ["reader"]
+        }));
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.jwt_identity_binding = JwtIdentityBindingMode::Strict;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: Some(token),
+        };
+        assert!(evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn token_roles_are_ignored_when_strict_identity_is_inconsistent() {
+        let token = make_token(&serde_json::json!({
+            "sub": "client_1",
+            "client_id": "client_2",
+            "roles": ["reader"]
+        }));
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.jwt_identity_binding = JwtIdentityBindingMode::Strict;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: Some(token),
+        };
+        assert!(!evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn token_roles_are_ignored_when_strict_identity_is_missing() {
+        let token = make_token(&serde_json::json!({
+            "roles": ["reader"]
+        }));
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.jwt_identity_binding = JwtIdentityBindingMode::Strict;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: Some(token),
+        };
+        assert!(!evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn empty_custom_policy_denies_without_matching_rule() {
+        let cfg = base_cfg();
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "sensors/client_1/temp".to_string(),
+            access: 0x02,
+            token: None,
+        };
+        assert!(!evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn client_roles_map_can_satisfy_role_rule_without_token() {
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Custom;
+        cfg.rules = vec![make_rule(
+            RuleEffect::Allow,
+            &["read"],
+            &["alerts/#"],
+            &[],
+            &["reader"],
+            "reader_alerts",
+        )];
+        cfg.client_roles.insert(
+            "client_1".to_string(),
+            vec!["reader".to_string(), "observer".to_string()],
+        );
+        let req = AuthRequest {
+            client_id: "client_1".to_string(),
+            topic: "alerts/critical".to_string(),
+            access: 0x01,
+            token: None,
+        };
+        assert!(evaluate_authorization(&cfg, &req));
+    }
+
+    #[test]
+    fn config_update_remains_incremental() {
+        let mut cfg = base_cfg();
+        cfg.authz_profile = PolicyProfile::Complex;
+        cfg.client_roles
+            .insert("client_1".to_string(), vec!["admin".to_string()]);
+        apply_config_update(
+            &mut cfg,
+            ConfigUpdate {
+                delay_ms: Some(200),
+                fail_mode: Some(FailMode::Rate),
+                fail_rate: Some(0.05),
+                authz_profile: None,
+                rules: None,
+                client_roles: None,
+                jwt_identity_binding: None,
+            },
+        );
+        assert_eq!(cfg.delay_ms, 200);
+        assert!(matches!(cfg.fail_mode, FailMode::Rate));
+        assert!((cfg.fail_rate - 0.05).abs() < f64::EPSILON);
+        assert_eq!(cfg.authz_profile, PolicyProfile::Complex);
+        assert_eq!(cfg.client_roles.len(), 1);
+    }
+
+    #[test]
+    fn config_reset_restores_startup_baseline() {
+        let baseline = AppConfig {
+            authz_profile: PolicyProfile::Simple,
+            jwt_identity_binding: JwtIdentityBindingMode::Strict,
+            max_conns: 2048,
+            ..base_cfg()
+        };
+        let mut cfg = baseline.clone();
+        cfg.delay_ms = 123;
+        cfg.fail_mode = FailMode::Always;
+        cfg.fail_rate = 0.8;
+        cfg.authz_profile = PolicyProfile::Complex;
+        cfg.rules = complex_profile_rules();
+        cfg.client_roles
+            .insert("client_2".to_string(), vec!["reader".to_string()]);
+
+        cfg = baseline;
+
+        assert_eq!(cfg.delay_ms, 0);
+        assert!(matches!(cfg.fail_mode, FailMode::None));
+        assert!(cfg.fail_rate.abs() < f64::EPSILON);
+        assert_eq!(cfg.authz_profile, PolicyProfile::Simple);
+        assert!(cfg.rules.is_empty());
+        assert!(cfg.client_roles.is_empty());
+        assert_eq!(cfg.jwt_identity_binding, JwtIdentityBindingMode::Strict);
+        assert_eq!(cfg.max_conns, 2048);
+    }
+}

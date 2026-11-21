@@ -1,0 +1,8425 @@
+#![recursion_limit = "256"]
+
+use base64::{Engine as _, engine::general_purpose};
+use biscuit_auth::PublicKey;
+use clap::Parser;
+use gen_tokens::biscuit_attenuation::{
+    BiscuitAttenuationOptions, attenuate_biscuit_token, load_public_key_hex,
+};
+use gen_tokens::mqtt_helpers::{
+    ClientSpec, ConnectReport, DEFAULT_KEEPALIVE_SECONDS, MqttHelperError, Result, connect,
+    decode_token_arg, poll_until, puback_reason_code, qos,
+};
+use rand::Rng as _;
+use rumqttc::mqttbytes::v5::{AuthProperties, Packet};
+use rumqttc::{AsyncClient, Event, Outgoing};
+use serde::de::{DeserializeSeed, Error as _, IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fs;
+use std::io::{self, BufReader};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{Notify, mpsc};
+
+const SYNC_CONNECT_RELEASE_DELAY: Duration = Duration::from_millis(200);
+// Safety-net bound for the in-process publish-release gate: if a local client
+// never reports ready (and never fails), release publishes rather than block
+// the whole run forever. Mirrors the external barrier's default timeout.
+const PUBLISH_RELEASE_READY_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_CONTROL_TOPIC: &str = "$CONTROL/dynamic-security/v1";
+const CLIENT_ID_PLACEHOLDER: &str = "{client_id}";
+const FANOUT_PAYLOAD_VERSION: &str = "v3";
+const FANOUT_LATENCY_CLOCK: &str = "clock_monotonic_raw";
+
+#[derive(Debug, Deserialize)]
+struct PasswordMapProfile {
+    kind: String,
+    entries: HashMap<String, PasswordMapEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PasswordMapEntry {
+    token: String,
+    exp: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedPassword {
+    bytes: Vec<u8>,
+    exp: Option<i64>,
+}
+
+#[derive(Debug)]
+struct PasswordMap {
+    max_clients: usize,
+    profile_semantics: HashMap<String, Value>,
+    profiles: HashMap<String, HashMap<String, ResolvedPassword>>,
+}
+
+struct PasswordMapSeed<'a> {
+    selected_profiles: Option<&'a HashSet<String>>,
+}
+
+impl<'de> DeserializeSeed<'de> for PasswordMapSeed<'_> {
+    type Value = PasswordMap;
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(PasswordMapVisitor {
+            selected_profiles: self.selected_profiles,
+        })
+    }
+}
+
+struct PasswordMapVisitor<'a> {
+    selected_profiles: Option<&'a HashSet<String>>,
+}
+
+impl<'de> Visitor<'de> for PasswordMapVisitor<'_> {
+    type Value = PasswordMap;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a password-map object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut version: Option<u64> = None;
+        let mut max_clients: Option<usize> = None;
+        let mut profile_semantics: Option<HashMap<String, Value>> = None;
+        let mut profiles: Option<HashMap<String, HashMap<String, ResolvedPassword>>> = None;
+
+        while let Some(field) = map.next_key::<String>()? {
+            match field.as_str() {
+                "version" => {
+                    if version.is_some() {
+                        return Err(A::Error::duplicate_field("version"));
+                    }
+                    version = Some(map.next_value()?);
+                }
+                "max_clients" => {
+                    if max_clients.is_some() {
+                        return Err(A::Error::duplicate_field("max_clients"));
+                    }
+                    max_clients = Some(map.next_value()?);
+                }
+                "profile_semantics" => {
+                    if profile_semantics.is_some() {
+                        return Err(A::Error::duplicate_field("profile_semantics"));
+                    }
+                    profile_semantics = Some(map.next_value()?);
+                }
+                "profiles" => {
+                    if profiles.is_some() {
+                        return Err(A::Error::duplicate_field("profiles"));
+                    }
+                    profiles = Some(map.next_value_seed(PasswordMapProfilesSeed {
+                        selected_profiles: self.selected_profiles,
+                    })?);
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+
+        let version = version.ok_or_else(|| A::Error::missing_field("version"))?;
+        if version != 2 {
+            return Err(A::Error::custom(format!(
+                "unsupported password-map version {version}; expected 2; regenerate tokens"
+            )));
+        }
+        Ok(PasswordMap {
+            max_clients: max_clients.ok_or_else(|| A::Error::missing_field("max_clients"))?,
+            profile_semantics: profile_semantics
+                .ok_or_else(|| A::Error::missing_field("profile_semantics"))?,
+            profiles: profiles.ok_or_else(|| A::Error::missing_field("profiles"))?,
+        })
+    }
+}
+
+struct PasswordMapProfilesSeed<'a> {
+    selected_profiles: Option<&'a HashSet<String>>,
+}
+
+impl<'de> DeserializeSeed<'de> for PasswordMapProfilesSeed<'_> {
+    type Value = HashMap<String, HashMap<String, ResolvedPassword>>;
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(PasswordMapProfilesVisitor {
+            selected_profiles: self.selected_profiles,
+        })
+    }
+}
+
+struct PasswordMapProfilesVisitor<'a> {
+    selected_profiles: Option<&'a HashSet<String>>,
+}
+
+impl<'de> Visitor<'de> for PasswordMapProfilesVisitor<'_> {
+    type Value = HashMap<String, HashMap<String, ResolvedPassword>>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a password-map profiles object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut profiles = HashMap::new();
+        while let Some(name) = map.next_key::<String>()? {
+            let selected = self
+                .selected_profiles
+                .is_none_or(|requested| requested.contains(&name));
+            if selected {
+                let profile: PasswordMapProfile = map.next_value()?;
+                let entries = resolve_password_map_profile(&name, profile)
+                    .map_err(|err| A::Error::custom(err.to_string()))?;
+                profiles.insert(name, entries);
+            } else {
+                map.next_value::<IgnoredAny>()?;
+            }
+        }
+        Ok(profiles)
+    }
+}
+
+fn resolve_password_map_profile(
+    name: &str,
+    profile: PasswordMapProfile,
+) -> Result<HashMap<String, ResolvedPassword>> {
+    if profile.kind != "jwt" && profile.kind != "biscuit" {
+        return Err(MqttHelperError::Message(format!(
+            "password-map profile {name:?} has unsupported kind {:?}",
+            profile.kind
+        )));
+    }
+    let mut entries = HashMap::new();
+    for (client_id, entry) in profile.entries {
+        entries.insert(
+            client_id,
+            ResolvedPassword {
+                bytes: decode_token_arg(&entry.token)?,
+                exp: entry.exp,
+            },
+        );
+    }
+    Ok(entries)
+}
+
+fn load_password_map(
+    path: &Path,
+    selected_profiles: Option<&HashSet<String>>,
+) -> Result<PasswordMap> {
+    let file = fs::File::open(path)
+        .map_err(|e| MqttHelperError::Message(format!("failed to read password-map: {e}")))?;
+    let mut deserializer = serde_json::Deserializer::from_reader(BufReader::new(file));
+    let map = PasswordMapSeed { selected_profiles }
+        .deserialize(&mut deserializer)
+        .map_err(|e| MqttHelperError::Message(format!("failed to parse password-map: {e}")))?;
+    deserializer
+        .end()
+        .map_err(|e| MqttHelperError::Message(format!("failed to parse password-map: {e}")))?;
+    Ok(map)
+}
+
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Parser, Clone)]
+struct Args {
+    #[arg(long, env = "MQTT_HOST", default_value = "localhost")]
+    host: String,
+    #[arg(long, env = "MQTT_PORT", default_value_t = 1883)]
+    port: u16,
+    #[arg(long, env = "MQTT_USERNAME", default_value = "jwt")]
+    username: String,
+    #[arg(long, env = "MQTT_PASSWORD", default_value = "")]
+    password: String,
+    #[arg(long, env = "MQTT_CLIENTS", default_value_t = 10)]
+    clients: usize,
+    #[arg(long, env = "MQTT_CLIENT_INDEX_START", default_value_t = 1)]
+    client_index_start: usize,
+    #[arg(long, env = "MQTT_CLIENT_ID")]
+    client_id: Option<String>,
+    #[arg(long, env = "MQTT_MESSAGES", default_value_t = 50)]
+    messages: usize,
+    #[arg(long, env = "MQTT_TOPIC", default_value = "sensors/{client_id}/temp")]
+    topic: String,
+    #[arg(long, env = "MQTT_QOS", default_value_t = 1)]
+    qos: u8,
+    #[arg(long, env = "MQTT_QOS_DISTRIBUTION")]
+    qos_distribution: Option<String>,
+    #[arg(long, env = "MQTT_MESSAGE_SIZE", default_value_t = 0)]
+    message_size: usize,
+    /// Per-publish PUBACK completion budget. The runner derives this from the
+    /// scenario's configured HTTP authorization delay so the delay remains the
+    /// measured independent variable and this timeout only provides headroom
+    /// for queued authorization under concurrent load.
+    #[arg(long, env = "MQTT_PUBLISH_TIMEOUT_SECONDS", default_value_t = 10)]
+    publish_timeout_seconds: u64,
+    /// Per-connection CONNACK budget. Shares the same derived headroom as the
+    /// publish timeout because connections queue behind the same serial
+    /// broker authorization path under injected PDP latency.
+    #[arg(long, env = "MQTT_CONNECT_TIMEOUT_SECONDS", default_value_t = 10)]
+    connect_timeout_seconds: u64,
+    /// MQTT keepalive interval. The runner raises this for HTTP-LATENCY
+    /// workloads whose serialized authorization round exceeds the default
+    /// 60 s, so the generic connection-liveness watchdog does not preempt
+    /// healthy queued work.
+    #[arg(
+        long,
+        env = "MQTT_KEEPALIVE_SECONDS",
+        default_value_t = DEFAULT_KEEPALIVE_SECONDS
+    )]
+    keepalive_seconds: u16,
+    /// Continue the configured workload after a failed publish. The benchmark
+    /// runner enables this only for scenarios whose result contract expects
+    /// workload-visible publish failures.
+    #[arg(long, env = "MQTT_CONTINUE_AFTER_PUBLISH_FAILURE")]
+    continue_after_publish_failure: bool,
+    #[arg(long)]
+    sync_connect: bool,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_BARRIER_URL")]
+    sync_connect_barrier_url: Option<String>,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_RUN_ID")]
+    sync_connect_run_id: Option<String>,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_PARTICIPANT_ID")]
+    sync_connect_participant_id: Option<String>,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_PARTICIPANTS")]
+    sync_connect_participants: Option<usize>,
+    #[arg(
+        long,
+        env = "MQTT_SYNC_CONNECT_BARRIER_TIMEOUT_SECONDS",
+        default_value_t = 120
+    )]
+    sync_connect_barrier_timeout_seconds: u64,
+    /// Post-CONNACK publish-release phase of the two-phase `sync_connect`
+    /// barrier. The connect-start barrier (`sync_connect_*`) aligns when every
+    /// participant begins CONNECT; this second barrier aligns when every
+    /// participant may begin the measured publish workload, once all of them
+    /// have successfully connected. Distinct run identifiers keep the two
+    /// phases from being confused.
+    #[arg(long, env = "MQTT_SYNC_CONNECT_PUBLISH_BARRIER_URL")]
+    sync_connect_publish_barrier_url: Option<String>,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_PUBLISH_RUN_ID")]
+    sync_connect_publish_run_id: Option<String>,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_PUBLISH_PARTICIPANT_ID")]
+    sync_connect_publish_participant_id: Option<String>,
+    #[arg(long, env = "MQTT_SYNC_CONNECT_PUBLISH_PARTICIPANTS")]
+    sync_connect_publish_participants: Option<usize>,
+    #[arg(
+        long,
+        env = "MQTT_SYNC_CONNECT_PUBLISH_BARRIER_TIMEOUT_SECONDS",
+        default_value_t = 120
+    )]
+    sync_connect_publish_barrier_timeout_seconds: u64,
+    #[arg(long, env = "MQTT_MODE", default_value = "publish")]
+    mode: String,
+    #[arg(long, env = "MQTT_FANOUT_TOPIC", default_value = "fanout/broadcast")]
+    fanout_topic: String,
+    #[arg(long, env = "MQTT_FANOUT_PUBLISHER_USERNAME")]
+    fanout_publisher_username: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_PUBLISHER_PASSWORD")]
+    fanout_publisher_password: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_ROLE", default_value = "combined")]
+    fanout_role: String,
+    #[arg(long, env = "MQTT_FANOUT_READY_DIR")]
+    fanout_ready_dir: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_READY_TIMEOUT_SECONDS", default_value_t = 120)]
+    fanout_ready_timeout_seconds: u64,
+    #[arg(long)]
+    tls: bool,
+    #[arg(long)]
+    tls_ca_file: Option<String>,
+    #[arg(long)]
+    tls_insecure: bool,
+    #[arg(long, env = "MQTT_CONTROL_TOPIC")]
+    control_topic: Option<String>,
+    #[arg(long, env = "MQTT_CONTROL_PAYLOAD")]
+    control_payload: Option<String>,
+    #[arg(long, env = "MQTT_CONTROL_PAYLOAD_FILE")]
+    control_payload_file: Option<String>,
+    #[arg(long, env = "MQTT_CONTROL_MODE")]
+    control_mode: bool,
+    #[arg(long, env = "MQTT_CONTROL_REPEAT", default_value_t = 1)]
+    control_repeat: usize,
+    #[arg(long, env = "MQTT_CONTROL_QOS", default_value_t = 1)]
+    control_qos: u8,
+    #[arg(long, env = "MQTT_CONTROL_AFTER_MESSAGES", default_value_t = 0)]
+    control_after_messages: usize,
+    #[arg(long, env = "MQTT_CONTROL_RESPONSE_TOPIC")]
+    control_response_topic: Option<String>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_USERNAME")]
+    runtime_control_username: Option<String>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_PASSWORD")]
+    runtime_control_password: Option<String>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_AFTER_MESSAGES", default_value_t = 0)]
+    runtime_control_after_messages: usize,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_EXPECT_DENIAL")]
+    runtime_control_expect_denial: bool,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_BARRIER_URL")]
+    runtime_control_barrier_url: Option<String>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_RUN_ID")]
+    runtime_control_run_id: Option<String>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_PARTICIPANT_ID")]
+    runtime_control_participant_id: Option<String>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_PARTICIPANTS")]
+    runtime_control_participants: Option<usize>,
+    #[arg(long, env = "MQTT_RUNTIME_CONTROL_LOCAL_AFTER_MESSAGES")]
+    runtime_control_local_after_messages: Option<usize>,
+    #[arg(
+        long,
+        env = "MQTT_RUNTIME_CONTROL_BARRIER_TIMEOUT_SECONDS",
+        default_value_t = 120
+    )]
+    runtime_control_barrier_timeout_seconds: u64,
+    #[arg(long)]
+    json: bool,
+    #[arg(long, env = "MQTT_OUTPUT_JSON_FILE")]
+    output_json_file: Option<String>,
+    #[arg(long, default_value = "INFO")]
+    log_level: String,
+    #[arg(long, env = "TOKEN_ISSUER_URL")]
+    token_issuer_url: Option<String>,
+    #[arg(long, env = "TOKEN_ISSUER_KIND")]
+    token_issuer_kind: Option<String>,
+    #[arg(long, env = "TOKEN_ISSUER_TTL")]
+    token_issuer_ttl: Option<u64>,
+    #[arg(long)]
+    token_issuer_no_default_roles: bool,
+    #[arg(long)]
+    token_issuer_no_default_grants: bool,
+    #[arg(long, env = "TOKEN_REFRESH_CODES", default_value = "5,135")]
+    token_refresh_codes: Option<String>,
+    #[arg(long, env = "MQTT_PROACTIVE_REFRESH")]
+    proactive_refresh: bool,
+    #[arg(
+        long,
+        env = "MQTT_PROACTIVE_REFRESH_MARGIN_SECONDS",
+        default_value_t = 60
+    )]
+    proactive_refresh_margin_seconds: u64,
+    #[arg(
+        long,
+        env = "MQTT_PROACTIVE_REFRESH_TIMEOUT_SECONDS",
+        default_value_t = 10
+    )]
+    proactive_refresh_timeout_seconds: u64,
+    #[arg(long, env = "MQTT_PROACTIVE_REFRESH_ASSERT_CONTINUITY")]
+    proactive_refresh_assert_continuity: bool,
+    #[arg(long, env = "MQTT_REAUTH_STORM")]
+    reauth_storm: bool,
+    #[arg(long, env = "JWT_IDENTITY_BINDING", default_value = "off")]
+    jwt_identity_binding: String,
+    #[arg(long, env = "BISCUIT_IDENTITY_BINDING", default_value = "off")]
+    biscuit_identity_binding: String,
+    #[arg(long, env = "BISCUIT_CLIENT_ID_FACT", default_value = "client_id")]
+    biscuit_client_id_fact: String,
+    #[arg(long)]
+    biscuit_attenuate: bool,
+    #[arg(long)]
+    biscuit_attenuate_deny: Vec<String>,
+    #[arg(long)]
+    biscuit_attenuate_check: Vec<String>,
+    #[arg(long)]
+    biscuit_attenuate_topic: Option<String>,
+    #[arg(long)]
+    biscuit_attenuate_op: Option<String>,
+    #[arg(long)]
+    biscuit_attenuate_ttl: Option<u64>,
+    #[arg(
+        long,
+        visible_alias = "derived-token-probe-subscribe-denied",
+        env = "MQTT_ATTENUATION_PROBE_SUBSCRIBE_DENIED"
+    )]
+    attenuation_probe_subscribe_denied: bool,
+    #[arg(long)]
+    biscuit_public_key_hex: Option<String>,
+    #[arg(long)]
+    biscuit_public_key_file: Option<String>,
+    #[arg(long)]
+    biscuit_attenuate_bin: Option<String>,
+    #[arg(long)]
+    biscuit_delegate: bool,
+    #[arg(long)]
+    biscuit_delegate_deny: Vec<String>,
+    #[arg(long)]
+    biscuit_delegate_check: Vec<String>,
+    #[arg(long)]
+    biscuit_delegate_topic: Option<String>,
+    #[arg(long)]
+    biscuit_delegate_op: Option<String>,
+    #[arg(long)]
+    biscuit_delegate_ttl: Option<u64>,
+    #[arg(long)]
+    biscuit_delegate_public_key_hex: Option<String>,
+    #[arg(long)]
+    biscuit_delegate_public_key_file: Option<String>,
+    #[arg(long)]
+    biscuit_delegate_bin: Option<String>,
+    #[arg(long)]
+    biscuit_delegate_handoff: bool,
+    #[arg(long)]
+    biscuit_delegate_handoff_topic: Option<String>,
+    #[arg(long)]
+    biscuit_delegate_handoff_token: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    biscuit_delegate_handoff_qos: u8,
+    #[arg(long)]
+    biscuit_delegate_handoff_no_retain: bool,
+    #[arg(
+        long,
+        env = "BISCUIT_DELEGATE_HANDOFF_ROLE",
+        default_value = "combined"
+    )]
+    biscuit_delegate_handoff_role: String,
+    #[arg(long, env = "BISCUIT_DELEGATE_HANDOFF_NONCE")]
+    biscuit_delegate_handoff_nonce: Option<String>,
+    #[arg(long, env = "BISCUIT_DELEGATE_HANDOFF_READY_DIR")]
+    biscuit_delegate_handoff_ready_dir: Option<String>,
+    #[arg(
+        long,
+        env = "BISCUIT_DELEGATE_HANDOFF_READY_TIMEOUT_SECONDS",
+        default_value_t = 120
+    )]
+    biscuit_delegate_handoff_ready_timeout_seconds: u64,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_KIND")]
+    fanout_churn_kind: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_AFTER_MESSAGES", default_value_t = 0)]
+    fanout_churn_after_messages: usize,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_INTERVAL_MESSAGES", default_value_t = 0)]
+    fanout_churn_interval_messages: usize,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_MAX_EVENTS", default_value_t = 1)]
+    fanout_churn_max_events: usize,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_SETTLE_MS", default_value_t = 0)]
+    fanout_churn_settle_ms: u64,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_PHASE_DELIVERY")]
+    fanout_churn_phase_delivery: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_DYNAMIC_SECURITY_SOURCE")]
+    fanout_churn_dynamic_security_source: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_CONTROL_TOPIC")]
+    fanout_churn_control_topic: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_CONTROL_PAYLOAD")]
+    fanout_churn_control_payload: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_EXPECT_CONTROL_NOTIFICATION")]
+    fanout_expect_control_notification: bool,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_SQLITE_DB")]
+    fanout_churn_sqlite_db: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_SQLITE_TOPIC")]
+    fanout_churn_sqlite_topic: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_CHURN_SQLITE_SUBSCRIBERS")]
+    fanout_churn_sqlite_subscribers: Option<usize>,
+    #[arg(long, env = "MQTT_PASSWORD_MAP")]
+    password_map: Option<PathBuf>,
+    #[arg(long, env = "MQTT_PASSWORD_MAP_PROFILE")]
+    password_map_profile: Option<String>,
+    #[arg(long, env = "MQTT_FANOUT_PUBLISHER_PASSWORD_MAP_PROFILE")]
+    fanout_publisher_password_map_profile: Option<String>,
+    #[arg(skip)]
+    password_map_data: Option<Arc<PasswordMap>>,
+}
+
+#[derive(Debug, Default, Serialize, Clone)]
+struct Summary {
+    count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p50_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p95_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    p99_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mean_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    median_ms: Option<f64>,
+}
+
+#[derive(Debug, Serialize)]
+struct Output {
+    inputs: Value,
+    connect: Summary,
+    token_refresh: Summary,
+    token_refresh_len: Summary,
+    proactive_refresh: Summary,
+    proactive_refresh_len: Summary,
+    proactive_refresh_attempts: usize,
+    proactive_refresh_successes: usize,
+    proactive_refresh_failures: usize,
+    session_continuity_ok: bool,
+    expiry_denial_count: usize,
+    delegation: Summary,
+    delegation_len: Summary,
+    delegation_handoff_publish: Summary,
+    attenuation: Summary,
+    attenuation_len: Summary,
+    authorization_probes: Value,
+    publish: Summary,
+    publish_qos_0: Summary,
+    publish_qos_1: Summary,
+    publish_qos_2: Summary,
+    publish_outcomes: Value,
+    qos_distribution_actual: Value,
+    receive: Summary,
+    control: Summary,
+    control_response: Summary,
+    control_responses: Value,
+    control_effect: Value,
+    control_injection_delay: Summary,
+    throughput_mps: f64,
+    publish_throughput_mps: f64,
+    receive_throughput_mps: f64,
+    received_messages: Value,
+    fanout_churn: Value,
+    sync_connect: Value,
+    reauth_storm: Value,
+    raw_publish_ms: Vec<f64>,
+    raw_metrics: Value,
+    errors: Vec<String>,
+    credential_issuance: Vec<CredentialIssuance>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CredentialIssuance {
+    client_id: String,
+    token_kind: String,
+    successful_requests: usize,
+    issued_at: i64,
+    exp: i64,
+    requested_ttl_seconds: u64,
+    token_sha256: String,
+    no_default_roles: bool,
+    no_default_grants: bool,
+    explicit_grants: usize,
+}
+
+#[derive(Debug, Default)]
+struct WorkerResult {
+    connect_ms: Option<f64>,
+    token_refresh_ms: Option<f64>,
+    token_refresh_len: Option<f64>,
+    proactive_refresh_ms: Vec<f64>,
+    proactive_refresh_len: Vec<f64>,
+    proactive_refresh_attempts: usize,
+    proactive_refresh_successes: usize,
+    proactive_refresh_failures: usize,
+    proactive_refresh_attempt_unix_ms: Vec<u128>,
+    expiry_denial_count: usize,
+    policy_denial_count: usize,
+    runtime_control_applied_after_successful_publishes: Option<usize>,
+    delegation_ms: Option<f64>,
+    delegation_len: Option<f64>,
+    attenuation_ms: Option<f64>,
+    attenuation_len: Option<f64>,
+    authorization_probe_successes: usize,
+    authorization_probe_failures: usize,
+    publish_ms: Vec<f64>,
+    publish_by_qos: [Vec<f64>; 3],
+    publish_attempts_by_qos: [usize; 3],
+    publish_failures_by_qos: [usize; 3],
+    receive_ms: Vec<f64>,
+    receive_by_churn_phase: BTreeMap<usize, usize>,
+    control_ms: Vec<f64>,
+    control_response_ms: Vec<f64>,
+    control_response_successes: usize,
+    control_response_failures: usize,
+    control_notifications: usize,
+    control_injection_ms: Vec<f64>,
+    sync_barrier_wait_ms: Option<f64>,
+    sync_barrier_released_at_unix_ms: Option<u128>,
+    sync_barrier_max_ready_skew_ms: Option<f64>,
+    sync_publish_barrier_wait_ms: Option<f64>,
+    sync_publish_barrier_released_at_unix_ms: Option<u128>,
+    sync_publish_barrier_max_ready_skew_ms: Option<f64>,
+    errors: Vec<String>,
+    credential_issuance: Vec<CredentialIssuance>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WorkerBootstrap {
+    delegation_ms: Option<f64>,
+    delegation_len: Option<f64>,
+    attenuation_ms: Option<f64>,
+    attenuation_len: Option<f64>,
+}
+
+struct WorkerInvocation {
+    args: Args,
+    index: usize,
+    bootstrap: WorkerBootstrap,
+    handoff_nonce: Option<String>,
+    handoff_password: Option<Vec<u8>>,
+    handoff_required: bool,
+    sync_connect: Option<Arc<SyncConnectGate>>,
+    publish_gate: Option<Arc<PublishStartGate>>,
+    reauth_storm: Option<Arc<ReauthStormGate>>,
+    runtime_control: Option<Arc<RuntimeControlState>>,
+    runtime_control_quota: Option<usize>,
+}
+
+struct StandardMetrics {
+    connect: Vec<f64>,
+    token_refresh: Vec<f64>,
+    token_refresh_len: Vec<f64>,
+    proactive_refresh: Vec<f64>,
+    proactive_refresh_len: Vec<f64>,
+    proactive_refresh_attempts: usize,
+    proactive_refresh_successes: usize,
+    proactive_refresh_failures: usize,
+    proactive_refresh_attempt_unix_ms: Vec<u128>,
+    expiry_denial_count: usize,
+    policy_denial_count: usize,
+    runtime_control_connect_ms: Option<f64>,
+    runtime_control_applied_after_successful_publishes: Option<usize>,
+    delegation: Vec<f64>,
+    delegation_len: Vec<f64>,
+    delegation_handoff_publish: Vec<f64>,
+    attenuation: Vec<f64>,
+    attenuation_len: Vec<f64>,
+    authorization_probe_successes: usize,
+    authorization_probe_failures: usize,
+    publish: Vec<f64>,
+    publish_qos_0: Vec<f64>,
+    publish_qos_1: Vec<f64>,
+    publish_qos_2: Vec<f64>,
+    publish_attempts_by_qos: [usize; 3],
+    publish_failures_by_qos: [usize; 3],
+    receive: Vec<f64>,
+    control: Vec<f64>,
+    control_response: Vec<f64>,
+    control_response_successes: usize,
+    control_response_failures: usize,
+    control_injection: Vec<f64>,
+    sync_barrier_wait: Vec<f64>,
+    sync_barrier_released_at_unix_ms: Vec<u128>,
+    sync_barrier_max_ready_skew_ms: Option<f64>,
+    sync_publish_barrier_wait: Vec<f64>,
+    sync_publish_barrier_released_at_unix_ms: Vec<u128>,
+    sync_publish_barrier_max_ready_skew_ms: Option<f64>,
+    errors: Vec<String>,
+    publish_throughput_mps: f64,
+    receive_throughput_mps: f64,
+    credential_issuance: Vec<CredentialIssuance>,
+}
+
+#[derive(Debug, Default)]
+struct RuntimeControlState {
+    successful_publishes: AtomicUsize,
+    publishers_finished: AtomicBool,
+    applied: AtomicBool,
+    progress: Notify,
+}
+
+#[derive(Debug, Clone)]
+struct HandoffPlan {
+    nonce: String,
+    workers: HashMap<String, WorkerBootstrap>,
+    tokens: HashMap<String, String>,
+    errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct HandoffPayload {
+    client_id: String,
+    token: String,
+    nonce: String,
+}
+
+#[derive(Debug, Default, Clone)]
+struct FanoutChurnState {
+    triggered: bool,
+    applied_events: usize,
+    control_ms: Vec<f64>,
+    phase_duration_ms: Vec<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct IssuedToken {
+    bytes: Vec<u8>,
+    exp: Option<i64>,
+    issuance: Option<CredentialIssuance>,
+}
+
+impl IssuedToken {
+    fn static_token(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            exp: None,
+            issuance: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct QosDistribution {
+    entries: Vec<(u8, f64)>,
+    schedule: Vec<u8>,
+    cursor: AtomicUsize,
+}
+
+impl QosDistribution {
+    fn parse(raw: Option<&str>) -> Result<Option<Self>> {
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let mut entries = Vec::new();
+        for part in raw.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let (qos_raw, weight_raw) = part.split_once(':').ok_or_else(|| {
+                MqttHelperError::Message(format!("invalid qos distribution entry: {part}"))
+            })?;
+            let qos_value = qos_raw.trim().parse::<u8>().map_err(|err| {
+                MqttHelperError::Message(format!("invalid qos value {qos_raw:?}: {err}"))
+            })?;
+            if !matches!(qos_value, 0..=2) {
+                return Err(MqttHelperError::Message(format!(
+                    "invalid qos value: {qos_value}"
+                )));
+            }
+            let weight = weight_raw.trim().parse::<f64>().map_err(|err| {
+                MqttHelperError::Message(format!("invalid qos weight {weight_raw:?}: {err}"))
+            })?;
+            if !weight.is_finite() || weight <= 0.0 {
+                return Err(MqttHelperError::Message(format!(
+                    "invalid qos weight: {weight}"
+                )));
+            }
+            entries.push((qos_value, weight));
+        }
+        if entries.is_empty() {
+            return Ok(None);
+        }
+        let total = entries.iter().map(|(_, weight)| *weight).sum::<f64>();
+        if !total.is_finite() || total <= 0.0 {
+            return Err(MqttHelperError::Message(
+                "qos distribution weights must sum to a positive value".to_string(),
+            ));
+        }
+        for (_, weight) in &mut entries {
+            *weight /= total;
+        }
+        // A fixed schedule makes benchmark mixes reproducible. Largest-remainder
+        // allocation preserves the normalized weights, while smooth weighted
+        // round-robin avoids long single-QoS runs.
+        const SLOTS: usize = 1000;
+        let mut counts = entries
+            .iter()
+            .map(|(_, weight)| {
+                (
+                    (*weight * SLOTS as f64).floor() as usize,
+                    *weight * SLOTS as f64,
+                )
+            })
+            .collect::<Vec<_>>();
+        let assigned = counts.iter().map(|(count, _)| *count).sum::<usize>();
+        let mut remainder_order = counts
+            .iter()
+            .enumerate()
+            .map(|(index, (count, exact))| (index, exact - *count as f64))
+            .collect::<Vec<_>>();
+        remainder_order.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (index, _) in remainder_order.into_iter().take(SLOTS - assigned) {
+            counts[index].0 += 1;
+        }
+        let mut current = vec![0isize; entries.len()];
+        let mut schedule = Vec::with_capacity(SLOTS);
+        for _ in 0..SLOTS {
+            for (index, (count, _)) in counts.iter().enumerate() {
+                current[index] += *count as isize;
+            }
+            let selected = current
+                .iter()
+                .enumerate()
+                .max_by_key(|(index, score)| (**score, std::cmp::Reverse(*index)))
+                .map_or(0, |(index, _)| index);
+            schedule.push(entries[selected].0);
+            current[selected] -= SLOTS as isize;
+        }
+        Ok(Some(Self {
+            entries,
+            schedule,
+            cursor: AtomicUsize::new(0),
+        }))
+    }
+
+    fn choose(&self) -> u8 {
+        let ordinal = self.cursor.fetch_add(1, Ordering::Relaxed);
+        self.schedule[ordinal % self.schedule.len()]
+    }
+
+    fn subscribe_qos(&self) -> u8 {
+        self.entries
+            .iter()
+            .map(|(qos_value, _)| *qos_value)
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn as_json(&self) -> Value {
+        Value::Array(
+            self.entries
+                .iter()
+                .map(|(qos_value, weight)| serde_json::json!({"qos": qos_value, "weight": weight}))
+                .collect(),
+        )
+    }
+}
+
+#[derive(Debug)]
+struct SyncConnectGate {
+    released: AtomicBool,
+    notify: Notify,
+}
+
+impl SyncConnectGate {
+    fn new() -> Self {
+        Self {
+            released: AtomicBool::new(false),
+            notify: Notify::new(),
+        }
+    }
+
+    async fn wait(&self) {
+        loop {
+            let notified = self.notify.notified();
+            if self.released.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
+    }
+
+    fn release(&self) {
+        self.released.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+}
+
+#[derive(Debug)]
+struct ReauthStormGate {
+    expected: usize,
+    ready: AtomicUsize,
+    released: AtomicBool,
+    notify: Notify,
+    ready_unix_ms: Mutex<Vec<u128>>,
+}
+
+impl ReauthStormGate {
+    fn new(expected: usize) -> Self {
+        Self {
+            expected,
+            ready: AtomicUsize::new(0),
+            released: AtomicBool::new(false),
+            notify: Notify::new(),
+            ready_unix_ms: Mutex::new(Vec::with_capacity(expected)),
+        }
+    }
+
+    async fn wait(&self, timeout: Duration) -> bool {
+        if let Ok(mut ready) = self.ready_unix_ms.lock() {
+            ready.push(unix_ms_now());
+        }
+        if self.ready.fetch_add(1, Ordering::AcqRel) + 1 >= self.expected {
+            self.released.store(true, Ordering::Release);
+            self.notify.notify_waiters();
+            return true;
+        }
+        let wait = async {
+            loop {
+                let notified = self.notify.notified();
+                if self.released.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(timeout, wait).await.is_ok()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ExternalSyncBarrier {
+    url: String,
+    run_id: String,
+    participant_id: String,
+    participants: usize,
+    timeout: Duration,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct SyncBarrierStatus {
+    ok: bool,
+    run_id: String,
+    participants: usize,
+    ready_count: usize,
+    released: bool,
+    released_at_unix_ms: Option<u128>,
+    max_ready_skew_ms: Option<f64>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SyncBarrierWaitReport {
+    wait_ms: f64,
+    status: SyncBarrierStatus,
+}
+
+fn external_sync_barrier(args: &Args) -> Result<Option<ExternalSyncBarrier>> {
+    let fields_set = [
+        args.sync_connect_barrier_url.is_some(),
+        args.sync_connect_run_id.is_some(),
+        args.sync_connect_participant_id.is_some(),
+        args.sync_connect_participants.is_some(),
+    ];
+    if fields_set.iter().all(|set| !set) {
+        return Ok(None);
+    }
+    if !args.sync_connect {
+        return Err(MqttHelperError::Message(
+            "sync_connect barrier options require --sync-connect".to_string(),
+        ));
+    }
+    if fields_set.iter().any(|set| !set) {
+        return Err(MqttHelperError::Message(
+            "sync_connect external barrier requires url, run_id, participant_id, and participants"
+                .to_string(),
+        ));
+    }
+    let participants = args.sync_connect_participants.unwrap_or_default();
+    if participants == 0 {
+        return Err(MqttHelperError::Message(
+            "sync_connect_participants must be greater than zero".to_string(),
+        ));
+    }
+    if args.clients != 1 {
+        return Err(MqttHelperError::Message(
+            "external sync_connect barrier requires --clients 1".to_string(),
+        ));
+    }
+    Ok(Some(ExternalSyncBarrier {
+        url: args
+            .sync_connect_barrier_url
+            .clone()
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_string(),
+        run_id: args.sync_connect_run_id.clone().unwrap_or_default(),
+        participant_id: args.sync_connect_participant_id.clone().unwrap_or_default(),
+        participants,
+        timeout: Duration::from_secs(args.sync_connect_barrier_timeout_seconds.max(1)),
+    }))
+}
+
+/// Resolve the post-CONNACK publish-release phase of the external two-phase
+/// `sync_connect` barrier. Mirrors [`external_sync_barrier`] so the same
+/// `sync-barrier` service and wire protocol back both phases, but with an
+/// independent run identifier so the phases cannot be confused.
+fn external_sync_connect_publish_barrier(args: &Args) -> Result<Option<ExternalSyncBarrier>> {
+    let fields_set = [
+        args.sync_connect_publish_barrier_url.is_some(),
+        args.sync_connect_publish_run_id.is_some(),
+        args.sync_connect_publish_participant_id.is_some(),
+        args.sync_connect_publish_participants.is_some(),
+    ];
+    if fields_set.iter().all(|set| !set) {
+        return Ok(None);
+    }
+    if !args.sync_connect {
+        return Err(MqttHelperError::Message(
+            "sync_connect publish barrier options require --sync-connect".to_string(),
+        ));
+    }
+    if fields_set.iter().any(|set| !set) {
+        return Err(MqttHelperError::Message(
+            "sync_connect publish barrier requires url, run_id, participant_id, and participants"
+                .to_string(),
+        ));
+    }
+    let participants = args.sync_connect_publish_participants.unwrap_or_default();
+    if participants == 0 {
+        return Err(MqttHelperError::Message(
+            "sync_connect_publish_participants must be greater than zero".to_string(),
+        ));
+    }
+    if args.clients != 1 {
+        return Err(MqttHelperError::Message(
+            "external sync_connect publish barrier requires --clients 1".to_string(),
+        ));
+    }
+    Ok(Some(ExternalSyncBarrier {
+        url: args
+            .sync_connect_publish_barrier_url
+            .clone()
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_string(),
+        run_id: args.sync_connect_publish_run_id.clone().unwrap_or_default(),
+        participant_id: args
+            .sync_connect_publish_participant_id
+            .clone()
+            .unwrap_or_default(),
+        participants,
+        timeout: Duration::from_secs(args.sync_connect_publish_barrier_timeout_seconds.max(1)),
+    }))
+}
+
+fn external_runtime_control_barrier(args: &Args) -> Result<Option<(ExternalSyncBarrier, usize)>> {
+    let fields_set = [
+        args.runtime_control_barrier_url.is_some(),
+        args.runtime_control_run_id.is_some(),
+        args.runtime_control_participant_id.is_some(),
+        args.runtime_control_participants.is_some(),
+        args.runtime_control_local_after_messages.is_some(),
+    ];
+    if fields_set.iter().all(|set| !set) {
+        return Ok(None);
+    }
+    if fields_set.iter().any(|set| !set) {
+        return Err(MqttHelperError::Message(
+            "external runtime control requires barrier_url, run_id, participant_id, participants, and local_after_messages"
+                .to_string(),
+        ));
+    }
+    if args.runtime_control_username.is_some() {
+        return Err(MqttHelperError::Message(
+            "external runtime control cannot be combined with an in-process runtime controller"
+                .to_string(),
+        ));
+    }
+    if args.clients != 1 {
+        return Err(MqttHelperError::Message(
+            "external runtime control requires --clients 1".to_string(),
+        ));
+    }
+    let participants = args.runtime_control_participants.unwrap_or_default();
+    if participants == 0 {
+        return Err(MqttHelperError::Message(
+            "runtime_control_participants must be greater than zero".to_string(),
+        ));
+    }
+    let local_after_messages = args
+        .runtime_control_local_after_messages
+        .unwrap_or_default();
+    if local_after_messages > args.messages {
+        return Err(MqttHelperError::Message(format!(
+            "runtime control local after-messages ({local_after_messages}) exceeds configured messages ({})",
+            args.messages
+        )));
+    }
+    Ok(Some((
+        ExternalSyncBarrier {
+            url: args
+                .runtime_control_barrier_url
+                .clone()
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_string(),
+            run_id: args.runtime_control_run_id.clone().unwrap_or_default(),
+            participant_id: args
+                .runtime_control_participant_id
+                .clone()
+                .unwrap_or_default(),
+            participants,
+            timeout: Duration::from_secs(args.runtime_control_barrier_timeout_seconds.max(1)),
+        },
+        local_after_messages,
+    )))
+}
+
+async fn wait_external_sync_barrier(
+    barrier: &ExternalSyncBarrier,
+) -> Result<SyncBarrierWaitReport> {
+    let client = reqwest::Client::builder()
+        .http2_prior_knowledge()
+        .timeout(barrier.timeout.saturating_add(Duration::from_secs(5)))
+        .build()
+        .map_err(|err| MqttHelperError::Message(format!("sync barrier client failed: {err}")))?;
+    let ready_url = format!(
+        "{}/runs/{}/ready/{}?participants={}",
+        barrier.url, barrier.run_id, barrier.participant_id, barrier.participants
+    );
+    let ready = client
+        .post(ready_url)
+        .send()
+        .await
+        .map_err(|err| MqttHelperError::Message(format!("sync barrier ready failed: {err}")))?;
+    let ready_status = ready.status();
+    if !ready_status.is_success() {
+        let body = ready.text().await.unwrap_or_default();
+        return Err(MqttHelperError::Message(format!(
+            "sync barrier ready returned {ready_status}: {body}"
+        )));
+    }
+    let started = Instant::now();
+    let wait_url = format!(
+        "{}/runs/{}/wait?timeout_ms={}",
+        barrier.url,
+        barrier.run_id,
+        barrier.timeout.as_millis()
+    );
+    let response = client
+        .get(wait_url)
+        .send()
+        .await
+        .map_err(|err| MqttHelperError::Message(format!("sync barrier wait failed: {err}")))?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(MqttHelperError::Message(format!(
+            "sync barrier wait returned {status}: {body}"
+        )));
+    }
+    let barrier_status = serde_json::from_str::<SyncBarrierStatus>(&body).map_err(|err| {
+        MqttHelperError::Message(format!("sync barrier wait response JSON failed: {err}"))
+    })?;
+    if !barrier_status.released {
+        return Err(MqttHelperError::Message(
+            "sync barrier wait returned before release".to_string(),
+        ));
+    }
+    Ok(SyncBarrierWaitReport {
+        wait_ms: started.elapsed().as_secs_f64() * 1000.0,
+        status: barrier_status,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_connect_json(
+    args: &Args,
+    barrier_wait: &[f64],
+    released_at: &[u128],
+    max_ready_skew_ms: Option<f64>,
+    publish_barrier_wait: &[f64],
+    publish_released_at: &[u128],
+    publish_max_ready_skew_ms: Option<f64>,
+    errors: &[String],
+) -> Value {
+    if !args.sync_connect {
+        return serde_json::json!({"enabled": false});
+    }
+    let barrier = if args.sync_connect_barrier_url.is_some() {
+        "external"
+    } else {
+        "in_process"
+    };
+    let publish_barrier = if args.sync_connect_publish_barrier_url.is_some() {
+        "external"
+    } else {
+        "in_process"
+    };
+    let first_release = released_at.iter().min().copied();
+    let publish_release = publish_released_at.iter().min().copied();
+    // The sync_connect result schema is topology-independent: every successful
+    // synchronized phase reports max_ready_skew_ms. In-process gates release
+    // all workers within one process, so cross-container readiness skew is
+    // definitionally 0.0. External barriers report the server-observed ready
+    // skew passed through from the wait report.
+    let skew_for = |kind: &str, value: Option<f64>| {
+        if kind == "in_process" {
+            serde_json::json!(0.0)
+        } else {
+            match value {
+                Some(value) => serde_json::json!(value),
+                None => serde_json::Value::Null,
+            }
+        }
+    };
+    serde_json::json!({
+        "enabled": true,
+        "barrier": barrier,
+        "run_id": args.sync_connect_run_id,
+        "participants": args.sync_connect_participants.unwrap_or(args.clients),
+        "ready_count": if barrier == "external" { barrier_wait.len() } else { args.clients },
+        "released_at_unix_ms": first_release,
+        "max_ready_skew_ms": skew_for(barrier, max_ready_skew_ms),
+        "client_wait": summarize(barrier_wait),
+        "errors": errors
+            .iter()
+            .filter(|err| err.starts_with("sync_barrier_"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        "publish_barrier": {
+            "barrier": publish_barrier,
+            "run_id": args.sync_connect_publish_run_id,
+            "participants": args.sync_connect_publish_participants.unwrap_or(args.clients),
+            "ready_count": if publish_barrier == "external" {
+                publish_barrier_wait.len()
+            } else {
+                args.clients
+            },
+            "released_at_unix_ms": publish_release,
+            "max_ready_skew_ms": skew_for(publish_barrier, publish_max_ready_skew_ms),
+            "client_wait": summarize(publish_barrier_wait),
+            "errors": errors
+                .iter()
+                .filter(|err| err.starts_with("sync_publish_barrier_"))
+                .cloned()
+                .collect::<Vec<_>>(),
+        },
+    })
+}
+
+#[derive(Debug)]
+struct PublishStartGate {
+    expected: usize,
+    ready: AtomicUsize,
+    unavailable: AtomicUsize,
+    released: AtomicBool,
+    ready_notify: Notify,
+    release_notify: Notify,
+}
+
+impl PublishStartGate {
+    fn new(expected: usize) -> Self {
+        Self {
+            expected,
+            ready: AtomicUsize::new(0),
+            unavailable: AtomicUsize::new(0),
+            released: AtomicBool::new(false),
+            ready_notify: Notify::new(),
+            release_notify: Notify::new(),
+        }
+    }
+
+    fn mark_ready(&self) {
+        self.ready.fetch_add(1, Ordering::AcqRel);
+        self.ready_notify.notify_waiters();
+    }
+
+    fn mark_unavailable(&self) {
+        self.unavailable.fetch_add(1, Ordering::AcqRel);
+        self.ready_notify.notify_waiters();
+    }
+
+    /// Wait until every expected local client has either reported ready (after
+    /// CONNACK) or become unavailable (connect failure / early return). Returns
+    /// `false` if the bound elapsed first, so the caller can release publishes
+    /// and surface a clear timeout diagnostic instead of deadlocking.
+    async fn wait_until_ready_or_unavailable(&self, timeout: Duration) -> bool {
+        let ready = async {
+            loop {
+                let notified = self.ready_notify.notified();
+                let accounted =
+                    self.ready.load(Ordering::Acquire) + self.unavailable.load(Ordering::Acquire);
+                if accounted >= self.expected {
+                    break;
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(timeout, ready).await.is_ok()
+    }
+
+    async fn wait_released(&self) {
+        loop {
+            let notified = self.release_notify.notified();
+            if self.released.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
+    }
+
+    fn release(&self) {
+        self.released.store(true, Ordering::Release);
+        self.release_notify.notify_waiters();
+    }
+}
+
+struct PublishGateParticipant {
+    gate: Option<Arc<PublishStartGate>>,
+    ready: bool,
+}
+
+impl PublishGateParticipant {
+    const fn new(gate: Option<Arc<PublishStartGate>>) -> Self {
+        Self { gate, ready: false }
+    }
+
+    fn mark_ready(&mut self) -> Option<Arc<PublishStartGate>> {
+        let gate = self.gate.as_ref()?;
+        self.ready = true;
+        gate.mark_ready();
+        Some(Arc::clone(gate))
+    }
+}
+
+impl Drop for PublishGateParticipant {
+    fn drop(&mut self) {
+        if !self.ready
+            && let Some(gate) = &self.gate
+        {
+            gate.mark_unavailable();
+        }
+    }
+}
+
+fn parse_token_refresh_codes(raw: Option<&str>) -> Result<Vec<u16>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut codes = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let value = part
+            .strip_prefix("0x")
+            .or_else(|| part.strip_prefix("0X"))
+            .map_or_else(|| part.parse::<u16>(), |hex| u16::from_str_radix(hex, 16))
+            .map_err(|err| {
+                MqttHelperError::Message(format!("invalid token refresh code {part:?}: {err}"))
+            })?;
+        codes.push(value);
+    }
+    codes.sort_unstable();
+    codes.dedup();
+    Ok(codes)
+}
+
+fn active_token_kind(username: &str) -> Option<&'static str> {
+    match username {
+        "jwt" => Some("jwt"),
+        "biscuit" => Some("biscuit"),
+        _ => None,
+    }
+}
+
+fn active_identity_binding_for<'a>(
+    username: &str,
+    jwt_identity_binding: &'a str,
+    biscuit_identity_binding: &'a str,
+) -> (Option<&'static str>, &'a str) {
+    match active_token_kind(username) {
+        Some("jwt") => (Some("jwt"), jwt_identity_binding),
+        Some("biscuit") => (Some("biscuit"), biscuit_identity_binding),
+        _ => (None, "off"),
+    }
+}
+
+fn active_identity_binding(args: &Args) -> (Option<&'static str>, &str) {
+    active_identity_binding_for(
+        &args.username,
+        args.jwt_identity_binding.as_str(),
+        args.biscuit_identity_binding.as_str(),
+    )
+}
+
+fn strict_multi_client_startup(args: &Args) -> bool {
+    let (_, binding) = active_identity_binding(args);
+    binding == "strict" && args.clients > 1
+}
+
+fn explicit_startup_provisioning(args: &Args) -> bool {
+    args.password.is_empty() && args.token_issuer_url.is_some()
+}
+
+fn should_startup_provision_token(args: &Args) -> bool {
+    strict_multi_client_startup(args)
+        || args.proactive_refresh
+        || explicit_startup_provisioning(args)
+}
+
+fn resolved_token_issuer_kind(args: &Args) -> Option<String> {
+    args.token_issuer_kind
+        .clone()
+        .or_else(|| active_token_kind(&args.username).map(str::to_string))
+}
+
+fn apply_legacy_defaults(args: &mut Args) {
+    if args.control_mode && args.control_topic.as_deref().is_none_or(str::is_empty) {
+        args.control_topic = Some(DEFAULT_CONTROL_TOPIC.to_string());
+    }
+}
+
+fn validate_startup_provisioning(args: &Args) -> Result<()> {
+    if args.client_index_start == 0 {
+        return Err(MqttHelperError::Message(
+            "client_index_start must be greater than zero".to_string(),
+        ));
+    }
+    if args.client_id.is_some() && args.clients != 1 {
+        return Err(MqttHelperError::Message(
+            "client_id override requires --clients 1".to_string(),
+        ));
+    }
+    if args.control_after_messages > 0 {
+        if args.control_mode {
+            return Err(MqttHelperError::Message(
+                "control after-messages cannot be combined with control mode".to_string(),
+            ));
+        }
+        if args.control_topic.as_deref().is_none_or(str::is_empty) {
+            return Err(MqttHelperError::Message(
+                "control after-messages requires a control topic".to_string(),
+            ));
+        }
+        if args.control_payload.is_none() && args.control_payload_file.is_none() {
+            return Err(MqttHelperError::Message(
+                "control after-messages requires a control payload or payload file".to_string(),
+            ));
+        }
+        if args.messages < args.control_after_messages {
+            return Err(MqttHelperError::Message(format!(
+                "control after-messages ({}) exceeds messages per client ({})",
+                args.control_after_messages, args.messages
+            )));
+        }
+    }
+    if args.runtime_control_username.is_some() {
+        if args.runtime_control_after_messages == 0 {
+            return Err(MqttHelperError::Message(
+                "runtime control after-messages must be greater than zero".to_string(),
+            ));
+        }
+        let publish_capacity = args.clients.checked_mul(args.messages).ok_or_else(|| {
+            MqttHelperError::Message(
+                "runtime control publish capacity overflowed clients * messages".to_string(),
+            )
+        })?;
+        if args.runtime_control_after_messages > publish_capacity {
+            return Err(MqttHelperError::Message(format!(
+                "runtime control after-messages ({}) exceeds configured publish capacity ({publish_capacity})",
+                args.runtime_control_after_messages
+            )));
+        }
+        if args.runtime_control_expect_denial
+            && args.runtime_control_after_messages >= publish_capacity
+        {
+            return Err(MqttHelperError::Message(format!(
+                "runtime control expected-denial mode requires after-messages ({}) to be below configured publish capacity ({publish_capacity})",
+                args.runtime_control_after_messages
+            )));
+        }
+    }
+    if !matches!(
+        args.biscuit_delegate_handoff_role.as_str(),
+        "combined" | "delegator" | "delegatee"
+    ) {
+        return Err(MqttHelperError::Message(format!(
+            "biscuit_delegate_handoff_role must be combined, delegator, or delegatee; got {:?}",
+            args.biscuit_delegate_handoff_role
+        )));
+    }
+    if args.biscuit_delegate_handoff_role != "combined" {
+        if !(args.biscuit_delegate && args.biscuit_delegate_handoff) {
+            return Err(MqttHelperError::Message(
+                "biscuit delegation handoff roles require --biscuit-delegate and --biscuit-delegate-handoff".to_string(),
+            ));
+        }
+        if args.mode == "fanout" {
+            return Err(MqttHelperError::Message(
+                "biscuit delegation handoff roles are only supported for standard publish/control mode".to_string(),
+            ));
+        }
+        if args.biscuit_delegate_handoff_nonce.is_none() {
+            return Err(MqttHelperError::Message(
+                "biscuit delegation handoff roles require biscuit_delegate_handoff_nonce"
+                    .to_string(),
+            ));
+        }
+        if args.biscuit_delegate_handoff_ready_dir.is_none() {
+            return Err(MqttHelperError::Message(
+                "biscuit delegation handoff roles require biscuit_delegate_handoff_ready_dir"
+                    .to_string(),
+            ));
+        }
+    }
+    if args.biscuit_delegate_handoff_role == "delegatee" && args.clients != 1 {
+        return Err(MqttHelperError::Message(
+            "biscuit_delegate_handoff_role=delegatee requires clients=1".to_string(),
+        ));
+    }
+    external_sync_barrier(args)?;
+    external_sync_connect_publish_barrier(args)?;
+    external_runtime_control_barrier(args)?;
+    if !matches!(
+        args.fanout_role.as_str(),
+        "combined" | "publisher" | "subscriber"
+    ) {
+        return Err(MqttHelperError::Message(format!(
+            "fanout_role must be combined, publisher, or subscriber; got {:?}",
+            args.fanout_role
+        )));
+    }
+    if args.fanout_role != "combined" {
+        if args.mode != "fanout" {
+            return Err(MqttHelperError::Message(
+                "fanout_role publisher/subscriber is only valid with mode=fanout".to_string(),
+            ));
+        }
+        if args.fanout_ready_dir.is_none() {
+            return Err(MqttHelperError::Message(
+                "fanout_role publisher/subscriber requires fanout_ready_dir".to_string(),
+            ));
+        }
+        if args.biscuit_delegate_handoff {
+            return Err(MqttHelperError::Message(
+                "biscuit delegation handoff is not supported with split fanout roles".to_string(),
+            ));
+        }
+    }
+    if args.fanout_role == "subscriber" && args.clients != 1 {
+        return Err(MqttHelperError::Message(
+            "fanout_role=subscriber requires clients=1".to_string(),
+        ));
+    }
+    if args.proactive_refresh {
+        if args.mode == "fanout" {
+            return Err(MqttHelperError::Message(
+                "proactive refresh is not currently supported in fanout mode.".to_string(),
+            ));
+        }
+        if args.token_issuer_url.is_none() {
+            return Err(MqttHelperError::Message(
+                "proactive refresh requires token_issuer_url".to_string(),
+            ));
+        }
+        if resolved_token_issuer_kind(args).is_none() {
+            return Err(MqttHelperError::Message(
+                "proactive refresh requires token_issuer_kind or username 'jwt'/'biscuit'"
+                    .to_string(),
+            ));
+        }
+        if let Some(ttl) = args.token_issuer_ttl
+            && ttl <= args.proactive_refresh_margin_seconds
+        {
+            return Err(MqttHelperError::Message(format!(
+                "proactive refresh requires token_issuer_ttl ({ttl}s) to be greater than proactive_refresh_margin_seconds ({}s)",
+                args.proactive_refresh_margin_seconds
+            )));
+        }
+        for (label, ttl) in [
+            (
+                "biscuit_attenuate_ttl",
+                args.biscuit_attenuate
+                    .then_some(args.biscuit_attenuate_ttl)
+                    .flatten(),
+            ),
+            (
+                "biscuit_delegate_ttl",
+                args.biscuit_delegate
+                    .then_some(args.biscuit_delegate_ttl)
+                    .flatten(),
+            ),
+        ] {
+            if let Some(ttl) = ttl
+                && ttl <= args.proactive_refresh_margin_seconds
+            {
+                return Err(MqttHelperError::Message(format!(
+                    "proactive refresh requires {label} ({ttl}s) to be greater than proactive_refresh_margin_seconds ({}s)",
+                    args.proactive_refresh_margin_seconds
+                )));
+            }
+        }
+    }
+    if args.reauth_storm {
+        if !args.proactive_refresh {
+            return Err(MqttHelperError::Message(
+                "reauth storm requires --proactive-refresh".to_string(),
+            ));
+        }
+        if args.clients <= 1 {
+            return Err(MqttHelperError::Message(
+                "reauth storm requires more than one client".to_string(),
+            ));
+        }
+        if args.sync_connect_barrier_url.is_some() {
+            return Err(MqttHelperError::Message(
+                "reauth storm uses an in-process refresh barrier and is not supported with external sync_connect barriers".to_string(),
+            ));
+        }
+    }
+    if explicit_startup_provisioning(args) && resolved_token_issuer_kind(args).is_none() {
+        return Err(MqttHelperError::Message(
+            "startup provisioning requires token_issuer_kind or username 'jwt'/'biscuit'"
+                .to_string(),
+        ));
+    }
+    if !strict_multi_client_startup(args) {
+        return Ok(());
+    }
+    if args.password_map_profile.is_some() {
+        return Ok(());
+    }
+    let active_kind = active_token_kind(&args.username).ok_or_else(|| {
+        MqttHelperError::Message(
+            "strict multi-client startup provisioning requires username 'jwt' or 'biscuit'"
+                .to_string(),
+        )
+    })?;
+    if args.token_issuer_url.is_none() {
+        return Err(MqttHelperError::Message(
+            "strict multi-client startup provisioning requires token_issuer_url".to_string(),
+        ));
+    }
+    let resolved = resolved_token_issuer_kind(args).unwrap_or_default();
+    if resolved != active_kind {
+        return Err(MqttHelperError::Message(format!(
+            "strict multi-client startup provisioning requires token_issuer_kind {active_kind:?}, got {resolved:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn should_provision_fanout_publisher(args: &Args, publisher_username: &str) -> Result<bool> {
+    if args.fanout_publisher_password_map_profile.is_some() {
+        return Ok(false);
+    }
+    if !strict_multi_client_startup(args) {
+        return Ok(false);
+    }
+
+    let (publisher_kind, publisher_binding) = active_identity_binding_for(
+        publisher_username,
+        args.jwt_identity_binding.as_str(),
+        args.biscuit_identity_binding.as_str(),
+    );
+    if publisher_binding != "strict" {
+        return Ok(false);
+    }
+
+    let publisher_kind = publisher_kind.ok_or_else(|| {
+        MqttHelperError::Message(
+            "strict multi-client startup provisioning requires fanout publisher username 'jwt' or 'biscuit'"
+                .to_string(),
+        )
+    })?;
+    let resolved = resolved_token_issuer_kind(args).unwrap_or_default();
+    if resolved != publisher_kind {
+        return Err(MqttHelperError::Message(format!(
+            "strict multi-client startup provisioning requires fanout publisher token_issuer_kind {publisher_kind:?}, got {resolved:?}"
+        )));
+    }
+
+    Ok(true)
+}
+
+async fn fetch_token(args: &Args, kind: &str, client_id: &str, topic: &str) -> Result<IssuedToken> {
+    let issuer_url = args
+        .token_issuer_url
+        .as_ref()
+        .ok_or_else(|| MqttHelperError::Message("token_issuer_url is required".to_string()))?;
+    let endpoint = match kind {
+        "jwt" => "/jwt",
+        "biscuit" => "/biscuit/binary",
+        other => {
+            return Err(MqttHelperError::Message(format!(
+                "unsupported token issuer kind: {other}"
+            )));
+        }
+    };
+    let mut payload = serde_json::json!({
+        "client_id": client_id,
+        "ttl_seconds": args.token_issuer_ttl,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        if args.token_issuer_no_default_roles {
+            object.insert("no_default_roles".to_string(), Value::Bool(true));
+        }
+        if args.token_issuer_no_default_grants {
+            object.insert("no_default_grants".to_string(), Value::Bool(true));
+            object.insert(
+                "grants".to_string(),
+                serde_json::json!([
+                    {"op": "publish", "res": topic},
+                    {"op": "subscribe", "res": topic}
+                ]),
+            );
+        }
+        match kind {
+            "jwt" if args.jwt_identity_binding == "strict" => {
+                object.insert("subject".to_string(), Value::String(client_id.to_string()));
+            }
+            "biscuit" => {
+                object.insert("topic".to_string(), Value::String(topic.to_string()));
+                if args.biscuit_identity_binding == "strict" {
+                    object.insert(
+                        "identity_fact_predicate".to_string(),
+                        Value::String(args.biscuit_client_id_fact.clone()),
+                    );
+                    object.insert(
+                        "identity_fact_value".to_string(),
+                        Value::String(client_id.to_string()),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .http2_prior_knowledge()
+        .timeout(Duration::from_secs(5));
+    if args.tls_insecure {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    if let Some(path) = &args.tls_ca_file {
+        let cert = reqwest::Certificate::from_pem(&std::fs::read(path)?).map_err(|err| {
+            MqttHelperError::Message(format!("invalid token issuer CA file {path}: {err}"))
+        })?;
+        builder = builder.add_root_certificate(cert);
+    }
+    let client = builder
+        .build()
+        .map_err(|err| MqttHelperError::Message(format!("token issuer client failed: {err}")))?;
+    let url = format!("{}{}", issuer_url.trim_end_matches('/'), endpoint);
+    let response = client
+        .post(url)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|err| MqttHelperError::Message(format!("token issuer request failed: {err}")))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(MqttHelperError::Message(format!(
+            "token issuer returned {status}: {body}"
+        )));
+    }
+    let body: Value = response.json().await.map_err(|err| {
+        MqttHelperError::Message(format!("token issuer response JSON failed: {err}"))
+    })?;
+    let exp = body
+        .get("exp")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| MqttHelperError::Message("token issuer response missing exp".to_string()))?;
+    let issued_at = body
+        .get("issued_at")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            MqttHelperError::Message("token issuer response missing issued_at".to_string())
+        })?;
+    let response_ttl = exp.saturating_sub(issued_at);
+    let requested_ttl_seconds = args
+        .token_issuer_ttl
+        .unwrap_or_else(|| u64::try_from(response_ttl).unwrap_or_default());
+    if exp <= issued_at
+        || args.token_issuer_ttl.is_some()
+            && response_ttl != i64::try_from(requested_ttl_seconds).unwrap_or(i64::MAX)
+    {
+        return Err(MqttHelperError::Message(format!(
+            "token issuer lifetime mismatch: issued_at={issued_at}, exp={exp}, requested_ttl={requested_ttl_seconds}"
+        )));
+    }
+    let bytes = if kind == "biscuit" {
+        let encoded = body
+            .get("data_b64")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MqttHelperError::Message("token issuer response missing data_b64".to_string())
+            })?;
+        let padding = "=".repeat((4 - encoded.len() % 4) % 4);
+        general_purpose::URL_SAFE
+            .decode(format!("{encoded}{padding}"))
+            .map_err(|err| MqttHelperError::Message(format!("invalid data_b64 token: {err}")))?
+    } else {
+        body.get("token")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                MqttHelperError::Message("token issuer response missing token".to_string())
+            })?
+            .as_bytes()
+            .to_vec()
+    };
+    let token_sha256 = hex::encode(Sha256::digest(&bytes));
+    let authority = body
+        .get("authority")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            MqttHelperError::Message("token issuer response missing authority".to_string())
+        })?;
+    let default_roles_applied = authority
+        .get("default_roles_applied")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            MqttHelperError::Message(
+                "token issuer authority missing default_roles_applied".to_string(),
+            )
+        })?;
+    let default_grants_applied = authority
+        .get("default_grants_applied")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            MqttHelperError::Message(
+                "token issuer authority missing default_grants_applied".to_string(),
+            )
+        })?;
+    let explicit_grants = authority
+        .get("explicit_grants")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            MqttHelperError::Message("token issuer authority missing explicit_grants".to_string())
+        })?;
+    Ok(IssuedToken {
+        bytes,
+        exp: Some(exp),
+        issuance: Some(CredentialIssuance {
+            client_id: client_id.to_string(),
+            token_kind: kind.to_string(),
+            successful_requests: 1,
+            issued_at,
+            exp,
+            requested_ttl_seconds,
+            token_sha256,
+            no_default_roles: if kind == "jwt" {
+                !default_roles_applied
+            } else {
+                args.token_issuer_no_default_roles
+            },
+            no_default_grants: !default_grants_applied,
+            explicit_grants,
+        }),
+    })
+}
+
+async fn startup_password(args: &Args, client_id: &str, topic: &str) -> Result<IssuedToken> {
+    if let Some(profile) = args.password_map_profile.as_deref() {
+        return password_map_token(args, profile, client_id);
+    }
+    if should_startup_provision_token(args) {
+        let kind = resolved_token_issuer_kind(args).ok_or_else(|| {
+            MqttHelperError::Message("startup provisioning requires token kind".to_string())
+        })?;
+        fetch_token(args, &kind, client_id, topic).await
+    } else {
+        decode_token_arg(&args.password).map(IssuedToken::static_token)
+    }
+}
+
+fn password_map_token(args: &Args, profile: &str, client_id: &str) -> Result<IssuedToken> {
+    let map = args.password_map_data.as_ref().ok_or_else(|| {
+        MqttHelperError::Message(format!(
+            "password-map profile {profile:?} requested without --password-map"
+        ))
+    })?;
+    let entries = map.profiles.get(profile).ok_or_else(|| {
+        MqttHelperError::Message(format!("password-map profile {profile:?} not found"))
+    })?;
+    let entry = entries.get(client_id).ok_or_else(|| {
+        MqttHelperError::Message(format!(
+            "password-map profile {profile:?} has no entry for {client_id:?} \
+             (max_clients={})",
+            map.max_clients
+        ))
+    })?;
+    Ok(IssuedToken {
+        bytes: entry.bytes.clone(),
+        exp: entry.exp,
+        issuance: None,
+    })
+}
+
+fn repo_root() -> PathBuf {
+    if let Ok(path) = std::env::var("MQTT_AUTH_BISCUIT_REPO_ROOT") {
+        return PathBuf::from(path);
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
+        .to_path_buf()
+}
+
+fn resolve_repo_path(path: &str) -> PathBuf {
+    let candidate = PathBuf::from(path);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        repo_root().join(candidate)
+    }
+}
+
+fn handoff_topic(args: &Args) -> Option<String> {
+    if args.biscuit_delegate_handoff {
+        Some(
+            args.biscuit_delegate_handoff_topic
+                .clone()
+                .unwrap_or_else(|| "delegation/handoff".to_string()),
+        )
+    } else {
+        None
+    }
+}
+
+const fn handoff_retain(args: &Args) -> bool {
+    !args.biscuit_delegate_handoff_no_retain
+}
+
+fn fill_nonce() -> String {
+    let mut bytes = [0u8; 16];
+    rand::rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+fn handoff_nonce(args: &Args) -> String {
+    args.biscuit_delegate_handoff_nonce
+        .clone()
+        .unwrap_or_else(fill_nonce)
+}
+
+fn handoff_ready_dir(args: &Args) -> Result<PathBuf> {
+    args.biscuit_delegate_handoff_ready_dir
+        .as_deref()
+        .map(resolve_repo_path)
+        .ok_or_else(|| {
+            MqttHelperError::Message("biscuit_delegate_handoff_ready_dir is required".to_string())
+        })
+}
+
+fn handoff_ready_path(dir: &Path, client_id: &str) -> PathBuf {
+    dir.join(format!("{client_id}.ready"))
+}
+
+fn handoff_release_path(dir: &Path) -> PathBuf {
+    dir.join("handoff.release")
+}
+
+fn write_handoff_ready(dir: &Path, client_id: &str, nonce: &str) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    let payload = serde_json::json!({
+        "client_id": client_id,
+        "nonce": nonce,
+        "ready": true,
+    });
+    fs::write(
+        handoff_ready_path(dir, client_id),
+        serde_json::to_vec(&payload)?,
+    )?;
+    Ok(())
+}
+
+fn write_handoff_release(dir: &Path, nonce: &str) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    let payload = serde_json::json!({
+        "nonce": nonce,
+        "release": true,
+    });
+    fs::write(handoff_release_path(dir), serde_json::to_vec(&payload)?)?;
+    Ok(())
+}
+
+fn valid_handoff_ready_file(dir: &Path, client_id: &str, nonce: &str) -> bool {
+    let Ok(bytes) = fs::read(handoff_ready_path(dir, client_id)) else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    payload.get("ready").and_then(Value::as_bool) == Some(true)
+        && payload.get("client_id").and_then(Value::as_str) == Some(client_id)
+        && payload.get("nonce").and_then(Value::as_str) == Some(nonce)
+}
+
+fn valid_handoff_release_file(dir: &Path, nonce: &str) -> bool {
+    let Ok(bytes) = fs::read(handoff_release_path(dir)) else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    payload.get("release").and_then(Value::as_bool) == Some(true)
+        && payload.get("nonce").and_then(Value::as_str) == Some(nonce)
+}
+
+async fn wait_for_handoff_ready_files(
+    dir: &Path,
+    client_ids: &[String],
+    nonce: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if client_ids
+            .iter()
+            .all(|client_id| valid_handoff_ready_file(dir, client_id, nonce))
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_handoff_release_file(dir: &Path, nonce: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if valid_handoff_release_file(dir, nonce) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+struct BiscuitTransform {
+    password: Vec<u8>,
+    elapsed_ms: f64,
+    token_len: f64,
+}
+
+struct BiscuitTransformRequest<'a> {
+    token: &'a [u8],
+    custom_bin: Option<&'a str>,
+    public_key_hex: Option<&'a str>,
+    public_key_file: Option<&'a str>,
+    restrict_topic: Option<&'a str>,
+    restrict_operation: Option<&'a str>,
+    ttl_seconds: Option<u64>,
+    denies: &'a [String],
+    checks: &'a [String],
+}
+
+fn usize_as_f64(value: usize) -> f64 {
+    u32::try_from(value).map_or_else(
+        |_| value.to_string().parse::<f64>().unwrap_or(f64::INFINITY),
+        f64::from,
+    )
+}
+
+fn unix_timestamp_now() -> Result<i64> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| MqttHelperError::Message(format!("system clock before epoch: {err}")))?;
+    i64::try_from(duration.as_secs())
+        .map_err(|_| MqttHelperError::Message("system timestamp exceeds i64 range".to_string()))
+}
+
+fn monotonic_raw_nanos_now() -> Result<u128> {
+    let mut timestamp = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: `timestamp` points to writable storage for one `timespec`, and
+    // `clock_gettime` initializes it on success before `assume_init` is used.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, timestamp.as_mut_ptr()) };
+    if result != 0 {
+        return Err(MqttHelperError::Message(format!(
+            "clock_monotonic_raw_failed:{}",
+            io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: a successful `clock_gettime` call initialized `timestamp`.
+    let timestamp = unsafe { timestamp.assume_init() };
+    let seconds = u128::try_from(timestamp.tv_sec).map_err(|_| {
+        MqttHelperError::Message("clock_monotonic_raw_negative_seconds".to_string())
+    })?;
+    let nanoseconds = u128::try_from(timestamp.tv_nsec).map_err(|_| {
+        MqttHelperError::Message("clock_monotonic_raw_negative_nanoseconds".to_string())
+    })?;
+    if nanoseconds >= 1_000_000_000 {
+        return Err(MqttHelperError::Message(
+            "clock_monotonic_raw_invalid_nanoseconds".to_string(),
+        ));
+    }
+    Ok(seconds * 1_000_000_000 + nanoseconds)
+}
+
+fn unix_ms_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn proactive_refresh_delay(exp: Option<i64>, margin_seconds: u64, now: i64) -> Option<Duration> {
+    let exp = exp?;
+    if exp <= now {
+        return Some(Duration::ZERO);
+    }
+    let margin = i64::try_from(margin_seconds).unwrap_or(i64::MAX);
+    let deadline = exp.saturating_sub(margin);
+    if deadline > now {
+        return u64::try_from(deadline - now).ok().map(Duration::from_secs);
+    }
+    Some(Duration::ZERO)
+}
+
+fn proactive_assertion_wait_timeout(args: &Args, exp: Option<i64>) -> Duration {
+    let delay = unix_timestamp_now()
+        .ok()
+        .and_then(|now| proactive_refresh_delay(exp, args.proactive_refresh_margin_seconds, now))
+        .unwrap_or_default();
+    delay
+        + Duration::from_secs(args.proactive_refresh_timeout_seconds.max(1))
+        + Duration::from_secs(1)
+}
+
+fn validate_proactive_refresh_assertion(args: &Args, output: &Output) -> Result<()> {
+    if !args.proactive_refresh_assert_continuity {
+        return Ok(());
+    }
+    if output.proactive_refresh_attempts == 0 {
+        return Err(MqttHelperError::Message(
+            "proactive refresh continuity assertion failed: no proactive refresh ran".to_string(),
+        ));
+    }
+    if !output.session_continuity_ok {
+        return Err(MqttHelperError::Message(
+            "proactive refresh continuity assertion failed: session continuity was not maintained"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn expiry_denial_error(error: &str) -> bool {
+    error.contains("NotAuthorized")
+        || error.contains("not authorized")
+        || error.contains("AuthenticationFailed")
+        || error.contains("authentication failed")
+}
+
+fn load_biscuit_public_key(
+    public_key_hex: Option<&str>,
+    public_key_file: Option<&str>,
+) -> Result<PublicKey> {
+    let hex_value = if let Some(public_key_hex) = public_key_hex {
+        public_key_hex.to_string()
+    } else if let Some(public_key_file) = public_key_file {
+        fs::read_to_string(public_key_file)
+            .map_err(|err| {
+                MqttHelperError::Message(format!(
+                    "failed to read public key file {public_key_file}: {err}"
+                ))
+            })?
+            .trim()
+            .to_string()
+    } else {
+        std::env::var("BISCUIT_PUBLIC_KEY_HEX")
+            .map_err(|_| MqttHelperError::Message("public key hex required".to_string()))?
+    };
+    load_public_key_hex(&hex_value).map_err(MqttHelperError::Message)
+}
+
+fn reject_custom_biscuit_transform_bin(custom_bin: Option<&str>, label: &str) -> Result<()> {
+    if custom_bin.is_some() {
+        return Err(MqttHelperError::Message(format!(
+            "{label} custom helper binaries are no longer supported; mqtt-loadgen now attenuates Biscuit tokens in-process"
+        )));
+    }
+    if std::env::var_os("BISCUIT_ATTENUATE_BIN").is_some() {
+        return Err(MqttHelperError::Message(
+            "BISCUIT_ATTENUATE_BIN is no longer supported; mqtt-loadgen now attenuates Biscuit tokens in-process"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn transform_biscuit_token(request: &BiscuitTransformRequest<'_>) -> Result<BiscuitTransform> {
+    reject_custom_biscuit_transform_bin(request.custom_bin, "Biscuit transform")?;
+    let public_key = load_biscuit_public_key(request.public_key_hex, request.public_key_file)?;
+    let ttl_seconds = request
+        .ttl_seconds
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| MqttHelperError::Message("ttl seconds exceeds i64 range".to_string()))?;
+    let started = Instant::now();
+    let password = attenuate_biscuit_token(
+        request.token,
+        public_key,
+        &BiscuitAttenuationOptions {
+            denies: request.denies.to_vec(),
+            checks: request.checks.to_vec(),
+            restrict_topic: request.restrict_topic.map(str::to_string),
+            restrict_operation: request.restrict_operation.map(str::to_string),
+            ttl_seconds,
+        },
+    )
+    .map_err(MqttHelperError::Message)?;
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    if password.is_empty() {
+        return Err(MqttHelperError::Message(
+            "biscuit transform produced empty token".to_string(),
+        ));
+    }
+    let token_len = usize_as_f64(password.len());
+    Ok(BiscuitTransform {
+        password,
+        elapsed_ms,
+        token_len,
+    })
+}
+
+fn expand_client_template(value: &str, client_id: &str) -> String {
+    value.replace(CLIENT_ID_PLACEHOLDER, client_id)
+}
+
+fn client_id_for(args: &Args, index: usize) -> String {
+    if let Some(client_id) = &args.client_id {
+        return client_id.clone();
+    }
+    format!("client_{}", args.client_index_start + index)
+}
+
+fn expand_client_templates(values: &[String], client_id: &str) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| expand_client_template(value, client_id))
+        .collect()
+}
+
+fn expand_client_placeholders(value: &mut Value, client_id: &str) {
+    match value {
+        Value::String(value) => *value = expand_client_template(value, client_id),
+        Value::Array(values) => {
+            for value in values {
+                expand_client_placeholders(value, client_id);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                expand_client_placeholders(value, client_id);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn expand_control_payload(raw: &[u8], client_id: &str) -> Vec<u8> {
+    serde_json::from_slice::<Value>(raw).map_or_else(
+        |_| {
+            std::str::from_utf8(raw).map_or_else(
+                |_| raw.to_vec(),
+                |payload| expand_client_template(payload, client_id).into_bytes(),
+            )
+        },
+        |mut value| {
+            expand_client_placeholders(&mut value, client_id);
+            serde_json::to_vec(&value).unwrap_or_else(|_| raw.to_vec())
+        },
+    )
+}
+
+fn load_control_payload(args: &Args, result: &mut WorkerResult) -> Vec<u8> {
+    match (&args.control_payload, &args.control_payload_file) {
+        (Some(payload), _) => payload.clone().into_bytes(),
+        (None, Some(path)) => match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                result
+                    .errors
+                    .push(format!("control_payload_file_failed:{err}"));
+                b"{}".to_vec()
+            }
+        },
+        (None, None) => b"{}".to_vec(),
+    }
+}
+
+const fn should_apply_worker_biscuit_transforms(
+    handoff_nonce: Option<&str>,
+    handoff_password_supplied: bool,
+    handoff_required: bool,
+) -> bool {
+    handoff_nonce.is_none() && !handoff_password_supplied && !handoff_required
+}
+
+fn apply_biscuit_transforms(
+    args: &Args,
+    client_id: &str,
+    result: &mut WorkerResult,
+    password: &mut Vec<u8>,
+) -> bool {
+    if args.biscuit_attenuate {
+        let original = password.clone();
+        let restrict_topic = args
+            .biscuit_attenuate_topic
+            .as_deref()
+            .map(|topic| expand_client_template(topic, client_id));
+        let denies = expand_client_templates(&args.biscuit_attenuate_deny, client_id);
+        let checks = expand_client_templates(&args.biscuit_attenuate_check, client_id);
+        match transform_biscuit_token(&BiscuitTransformRequest {
+            token: password,
+            custom_bin: args.biscuit_attenuate_bin.as_deref(),
+            public_key_hex: args.biscuit_public_key_hex.as_deref(),
+            public_key_file: args.biscuit_public_key_file.as_deref(),
+            restrict_topic: restrict_topic.as_deref(),
+            restrict_operation: args.biscuit_attenuate_op.as_deref(),
+            ttl_seconds: args.biscuit_attenuate_ttl,
+            denies: &denies,
+            checks: &checks,
+        }) {
+            Ok(transform) => {
+                if transform.password == original {
+                    result
+                        .errors
+                        .push("attenuation_failed:derived token is unchanged".to_string());
+                    return false;
+                }
+                *password = transform.password;
+                result.attenuation_ms = Some(transform.elapsed_ms);
+                result.attenuation_len = Some(transform.token_len);
+            }
+            Err(err) => {
+                result.errors.push(format!("attenuation_failed:{err}"));
+                return false;
+            }
+        }
+    }
+    if args.biscuit_delegate {
+        let original = password.clone();
+        let restrict_topic = args
+            .biscuit_delegate_topic
+            .as_deref()
+            .map(|topic| expand_client_template(topic, client_id));
+        let denies = expand_client_templates(&args.biscuit_delegate_deny, client_id);
+        let checks = expand_client_templates(&args.biscuit_delegate_check, client_id);
+        match transform_biscuit_token(&BiscuitTransformRequest {
+            token: password,
+            custom_bin: args.biscuit_delegate_bin.as_deref(),
+            public_key_hex: args.biscuit_delegate_public_key_hex.as_deref(),
+            public_key_file: args.biscuit_delegate_public_key_file.as_deref(),
+            restrict_topic: restrict_topic.as_deref(),
+            restrict_operation: args.biscuit_delegate_op.as_deref(),
+            ttl_seconds: args.biscuit_delegate_ttl,
+            denies: &denies,
+            checks: &checks,
+        }) {
+            Ok(transform) => {
+                if transform.password == original {
+                    result
+                        .errors
+                        .push("delegation_failed:derived token is unchanged".to_string());
+                    return false;
+                }
+                *password = transform.password;
+                result.delegation_ms = Some(transform.elapsed_ms);
+                result.delegation_len = Some(transform.token_len);
+            }
+            Err(err) => {
+                result.errors.push(format!("delegation_failed:{err}"));
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn transformed_biscuit_expiry(args: &Args, current_exp: Option<i64>) -> Result<Option<i64>> {
+    let now = unix_timestamp_now()?;
+    let mut exp = current_exp;
+    for ttl in [
+        args.biscuit_attenuate
+            .then_some(args.biscuit_attenuate_ttl)
+            .flatten(),
+        args.biscuit_delegate
+            .then_some(args.biscuit_delegate_ttl)
+            .flatten(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let ttl = i64::try_from(ttl)
+            .map_err(|_| MqttHelperError::Message("ttl seconds exceeds i64 range".to_string()))?;
+        let transform_exp = now.saturating_add(ttl);
+        exp = Some(exp.map_or(transform_exp, |existing| existing.min(transform_exp)));
+    }
+    Ok(exp)
+}
+
+fn refresh_token_expiry(args: &Args, token: &mut IssuedToken, transformed: bool) -> Result<()> {
+    if transformed {
+        token.exp = transformed_biscuit_expiry(args, token.exp)?;
+    }
+    Ok(())
+}
+
+async fn prepare_handoff(args: &Args, mode_topic: &str) -> Option<HandoffPlan> {
+    if !(args.biscuit_delegate && args.biscuit_delegate_handoff) {
+        return None;
+    }
+    let nonce = handoff_nonce(args);
+    let mut workers = HashMap::new();
+    let mut published_tokens = HashMap::new();
+    let mut errors = Vec::new();
+    for index in 0..args.clients {
+        let client_id = client_id_for(args, index);
+        let topic = if mode_topic.contains(CLIENT_ID_PLACEHOLDER) {
+            expand_client_template(mode_topic, &client_id)
+        } else {
+            mode_topic.to_string()
+        };
+        let mut result = WorkerResult::default();
+        let mut password = match startup_password(args, &client_id, &topic).await {
+            Ok(password) => password,
+            Err(err) => {
+                errors.push(format!("startup_provisioning_failed:{client_id}:{err}"));
+                continue;
+            }
+        };
+        if !apply_biscuit_transforms(args, &client_id, &mut result, &mut password.bytes) {
+            errors.extend(
+                result
+                    .errors
+                    .into_iter()
+                    .map(|err| format!("{client_id}:{err}")),
+            );
+            continue;
+        }
+        published_tokens.insert(
+            client_id.clone(),
+            general_purpose::URL_SAFE_NO_PAD.encode(&password.bytes),
+        );
+        workers.insert(
+            client_id,
+            WorkerBootstrap {
+                delegation_ms: result.delegation_ms,
+                delegation_len: result.delegation_len,
+                attenuation_ms: result.attenuation_ms,
+                attenuation_len: result.attenuation_len,
+            },
+        );
+    }
+    Some(HandoffPlan {
+        nonce,
+        workers,
+        tokens: published_tokens,
+        errors,
+    })
+}
+
+fn ensure_policy_tables(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+        CREATE TABLE IF NOT EXISTS users(client_id TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS roles(role_name TEXT PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS user_roles(
+            client_id TEXT NOT NULL,
+            role_name TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 100,
+            PRIMARY KEY(client_id, role_name)
+        );
+        CREATE TABLE IF NOT EXISTS role_acls(
+            role_name TEXT NOT NULL,
+            topic_filter TEXT NOT NULL,
+            access INTEGER NOT NULL,
+            PRIMARY KEY(role_name, topic_filter, access)
+        );
+        CREATE TABLE IF NOT EXISTS role_deny_acls(
+            role_name TEXT NOT NULL,
+            topic_filter TEXT NOT NULL,
+            access INTEGER NOT NULL,
+            PRIMARY KEY(role_name, topic_filter, access)
+        );
+        CREATE TABLE IF NOT EXISTS acl(
+            client_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            access INTEGER NOT NULL,
+            PRIMARY KEY(client_id, topic, access)
+        );",
+    )
+}
+
+fn sqlite_revoke_read(db_path: &str, topic: &str) -> Result<()> {
+    let conn = rusqlite::Connection::open(resolve_repo_path(db_path))
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_open_failed:{err}")))?;
+    ensure_policy_tables(&conn)
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_schema_failed:{err}")))?;
+    conn.execute(
+        "DELETE FROM role_acls WHERE role_name = ?1 AND topic_filter = ?2 AND access = 1",
+        ("fanout_reader", topic),
+    )
+    .map_err(|err| MqttHelperError::Message(format!("sqlite_revoke_failed:{err}")))?;
+    Ok(())
+}
+
+fn sqlite_grant_read(db_path: &str, topic: &str) -> Result<()> {
+    let conn = rusqlite::Connection::open(resolve_repo_path(db_path))
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_open_failed:{err}")))?;
+    ensure_policy_tables(&conn)
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_schema_failed:{err}")))?;
+    conn.execute(
+        "INSERT OR REPLACE INTO role_acls(role_name, topic_filter, access) VALUES(?1, ?2, 1)",
+        ("fanout_reader", topic),
+    )
+    .map_err(|err| MqttHelperError::Message(format!("sqlite_grant_failed:{err}")))?;
+    Ok(())
+}
+
+fn sqlite_toggle_read(db_path: &str, topic: &str) -> Result<()> {
+    let conn = rusqlite::Connection::open(resolve_repo_path(db_path))
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_open_failed:{err}")))?;
+    ensure_policy_tables(&conn)
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_schema_failed:{err}")))?;
+    let exists: Option<i32> = conn
+        .query_row(
+            "SELECT 1 FROM role_acls WHERE role_name = ?1 AND topic_filter = ?2 AND access = 1 LIMIT 1",
+            ("fanout_reader", topic),
+            |row| row.get(0),
+        )
+        .ok();
+    drop(conn);
+    if exists.is_some() {
+        sqlite_revoke_read(db_path, topic)
+    } else {
+        sqlite_grant_read(db_path, topic)
+    }
+}
+
+fn sqlite_toggle_private_deny(db_path: &str, topic: &str) -> Result<()> {
+    let conn = rusqlite::Connection::open(resolve_repo_path(db_path))
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_open_failed:{err}")))?;
+    ensure_policy_tables(&conn)
+        .map_err(|err| MqttHelperError::Message(format!("sqlite_schema_failed:{err}")))?;
+    let exists: Option<i32> = conn
+        .query_row(
+            "SELECT 1 FROM role_deny_acls WHERE role_name = ?1 AND topic_filter = ?2 AND access = 1 LIMIT 1",
+            ("deep_private_deny", topic),
+            |row| row.get(0),
+        )
+        .ok();
+    if exists.is_some() {
+        conn.execute(
+            "DELETE FROM role_deny_acls WHERE role_name = ?1 AND topic_filter = ?2 AND access IN (1, 4)",
+            ("deep_private_deny", topic),
+        )
+    } else {
+        conn.execute(
+            "INSERT OR REPLACE INTO role_deny_acls(role_name, topic_filter, access) VALUES(?1, ?2, 4), (?1, ?2, 1)",
+            ("deep_private_deny", topic),
+        )
+    }
+    .map_err(|err| MqttHelperError::Message(format!("sqlite_private_deny_failed:{err}")))?;
+    Ok(())
+}
+
+const fn should_apply_churn(args: &Args, sequence_id: usize, state: &FanoutChurnState) -> bool {
+    if args.fanout_churn_kind.is_none()
+        || sequence_id < args.fanout_churn_after_messages
+        || state.applied_events >= args.fanout_churn_max_events
+    {
+        return false;
+    }
+    if sequence_id == args.fanout_churn_after_messages {
+        return true;
+    }
+    args.fanout_churn_interval_messages > 0
+        && (sequence_id - args.fanout_churn_after_messages)
+            .is_multiple_of(args.fanout_churn_interval_messages)
+}
+
+// Cumulative count of deliveries expected before the churn event at `sequence_id`,
+// derived from the `--fanout-churn-phase-delivery` contract ("all"/"none" per phase).
+// Returns None when no contract is supplied, which skips the receipt barrier entirely:
+// direct loadgen invocations without the contract accept the churn/delivery race.
+// The benchmark runner always supplies the contract for churn scenarios.
+fn expected_fanout_churn_receipts(args: &Args, sequence_id: usize) -> Option<usize> {
+    let expectations = args.fanout_churn_phase_delivery.as_deref()?;
+    let expectations = expectations.split(',').collect::<Vec<_>>();
+    if expectations
+        .iter()
+        .any(|expectation| !matches!(*expectation, "all" | "none"))
+    {
+        return None;
+    }
+
+    let mut state = FanoutChurnState::default();
+    let mut expected = 0usize;
+    for prior_sequence_id in 0..sequence_id {
+        if should_apply_churn(args, prior_sequence_id, &state) {
+            state.applied_events += 1;
+        }
+        if expectations.get(state.applied_events).copied() == Some("all") {
+            expected = expected.saturating_add(args.clients);
+        }
+    }
+    Some(expected)
+}
+
+fn fanout_phase_publish_counts(args: &Args, applied_events: usize) -> Vec<usize> {
+    let mut counts = vec![0];
+    let mut simulated = FanoutChurnState::default();
+    for sequence_id in 0..args.messages {
+        if simulated.applied_events < applied_events
+            && should_apply_churn(args, sequence_id, &simulated)
+        {
+            simulated.applied_events += 1;
+            counts.push(0);
+        }
+        let phase = simulated.applied_events;
+        if let Some(count) = counts.get_mut(phase) {
+            *count += 1;
+        }
+    }
+    counts
+}
+
+async fn apply_fanout_churn(
+    args: &Args,
+    publisher: &rumqttc::AsyncClient,
+    publisher_eventloop: &mut rumqttc::EventLoop,
+) -> Option<String> {
+    let kind = args.fanout_churn_kind.as_deref()?;
+    let result = match kind {
+        "dynamic_security_swap" => {
+            let Some(source) = &args.fanout_churn_dynamic_security_source else {
+                return Some("fanout_churn_missing_dynamic_security_source".to_string());
+            };
+            fs::copy(
+                resolve_repo_path(source),
+                resolve_repo_path("docker/dynamic-security.json"),
+            )
+            .map(|_| ())
+            .map_err(|err| MqttHelperError::Message(format!("dynsec_copy_failed:{err}")))
+        }
+        "dynamic_security_control" => {
+            let Some(topic) = &args.fanout_churn_control_topic else {
+                return Some("fanout_churn_missing_control_topic".to_string());
+            };
+            let Some(payload) = &args.fanout_churn_control_payload else {
+                return Some("fanout_churn_missing_control_payload".to_string());
+            };
+            async {
+                let correlation = format!("fanout-churn-{}", args.fanout_churn_after_messages);
+                let correlated = correlated_control_payload(payload.as_bytes(), &correlation)?;
+                let expected_responses = control_command_count(&correlated)?;
+                let response_topic = args
+                    .control_response_topic
+                    .as_deref()
+                    .unwrap_or("$CONTROL/dynamic-security/v1/response");
+                publish_fanout_control_and_wait(
+                    publisher,
+                    publisher_eventloop,
+                    topic,
+                    correlated,
+                    response_topic,
+                    &correlation,
+                    expected_responses,
+                )
+                .await
+            }
+            .await
+        }
+        "sqlite_revoke_read" => {
+            let Some(db) = &args.fanout_churn_sqlite_db else {
+                return Some("fanout_churn_missing_sqlite_db".to_string());
+            };
+            let topic = args
+                .fanout_churn_sqlite_topic
+                .as_deref()
+                .unwrap_or(&args.fanout_topic);
+            sqlite_revoke_read(db, topic)
+        }
+        "sqlite_toggle_read" => {
+            let Some(db) = &args.fanout_churn_sqlite_db else {
+                return Some("fanout_churn_missing_sqlite_db".to_string());
+            };
+            let topic = args
+                .fanout_churn_sqlite_topic
+                .as_deref()
+                .unwrap_or(&args.fanout_topic);
+            sqlite_toggle_read(db, topic)
+        }
+        "sqlite_toggle_private_deny" => {
+            let Some(db) = &args.fanout_churn_sqlite_db else {
+                return Some("fanout_churn_missing_sqlite_db".to_string());
+            };
+            let topic = args
+                .fanout_churn_sqlite_topic
+                .as_deref()
+                .unwrap_or(&args.fanout_topic);
+            sqlite_toggle_private_deny(db, topic)
+        }
+        other => return Some(format!("fanout_churn_unknown_kind:{other}")),
+    };
+    if let Err(err) = result {
+        return Some(format!("fanout_churn_failed:{err}"));
+    }
+    None
+}
+
+fn inputs_json(
+    args: &Args,
+    mode: &str,
+    qos_distribution: Option<&QosDistribution>,
+    token_refresh_codes: &[u16],
+    handoff_nonce: Option<&str>,
+) -> Value {
+    let credential_attestation = |profile: &str, validated_credentials: usize| {
+        let semantic = args
+            .password_map_data
+            .as_ref()
+            .and_then(|map| map.profile_semantics.get(profile));
+        serde_json::json!({
+            "profile": profile,
+            "semantic": semantic,
+            "validated_credentials": validated_credentials,
+        })
+    };
+    let mut credential_attestations = serde_json::Map::new();
+    let attest_clients = (mode != "fanout"
+        || matches!(args.fanout_role.as_str(), "combined" | "subscriber"))
+        && args.biscuit_delegate_handoff_role != "delegatee";
+    let attest_fanout_publisher =
+        mode == "fanout" && matches!(args.fanout_role.as_str(), "combined" | "publisher");
+    if attest_clients && let Some(profile) = args.password_map_profile.as_deref() {
+        credential_attestations.insert(
+            "clients".to_string(),
+            credential_attestation(profile, args.clients),
+        );
+    }
+    if attest_fanout_publisher
+        && let Some(profile) = args.fanout_publisher_password_map_profile.as_deref()
+    {
+        credential_attestations.insert(
+            "fanout_publisher".to_string(),
+            credential_attestation(profile, 1),
+        );
+    }
+    serde_json::json!({
+        "host": args.host,
+        "port": args.port,
+        "username": args.username,
+        "fanout_publisher_username": args.fanout_publisher_username,
+        "fanout_role": args.fanout_role,
+        "fanout_ready_timeout_seconds": args.fanout_ready_timeout_seconds,
+        "clients": args.clients,
+        "message_count": args.messages,
+        "qos": args.qos,
+        "qos_distribution": qos_distribution.map(QosDistribution::as_json),
+        "message_size": args.message_size,
+        "publish_timeout_seconds": args.publish_timeout_seconds,
+        "connect_timeout_seconds": args.connect_timeout_seconds,
+        "keepalive_seconds": args.keepalive_seconds,
+        "protocol": "mqttv5",
+        "sync_connect": args.sync_connect,
+        "sync_connect_barrier_url": args.sync_connect_barrier_url,
+        "sync_connect_run_id": args.sync_connect_run_id,
+        "sync_connect_participant_id": args.sync_connect_participant_id,
+        "sync_connect_participants": args.sync_connect_participants,
+        "sync_connect_barrier_timeout_seconds": args.sync_connect_barrier_timeout_seconds,
+        "sync_connect_publish_barrier_url": args.sync_connect_publish_barrier_url,
+        "sync_connect_publish_run_id": args.sync_connect_publish_run_id,
+        "sync_connect_publish_participant_id": args.sync_connect_publish_participant_id,
+        "sync_connect_publish_participants": args.sync_connect_publish_participants,
+        "sync_connect_publish_barrier_timeout_seconds":
+            args.sync_connect_publish_barrier_timeout_seconds,
+        "token_issuer_url": args.token_issuer_url,
+        "token_issuer_kind": resolved_token_issuer_kind(args),
+        "token_issuer_no_default_roles": args.token_issuer_no_default_roles,
+        "token_issuer_no_default_grants": args.token_issuer_no_default_grants,
+        "token_refresh_codes": token_refresh_codes,
+        "proactive_refresh": args.proactive_refresh,
+        "proactive_refresh_margin_seconds": args.proactive_refresh_margin_seconds,
+        "proactive_refresh_timeout_seconds": args.proactive_refresh_timeout_seconds,
+        "proactive_refresh_assert_continuity": args.proactive_refresh_assert_continuity,
+        "reauth_storm": args.reauth_storm,
+        "jwt_identity_binding": args.jwt_identity_binding,
+        "biscuit_identity_binding": args.biscuit_identity_binding,
+        "biscuit_client_id_fact": args.biscuit_client_id_fact,
+        "biscuit_transform_mode": "in_process",
+        "credential_attestations": credential_attestations,
+        "strict_multi_client_startup_provisioning": strict_multi_client_startup(args),
+        "mode": mode,
+        "fanout_latency_clock": (mode == "fanout").then(|| serde_json::json!({
+            "source": FANOUT_LATENCY_CLOCK,
+            "payload_version": FANOUT_PAYLOAD_VERSION,
+        })),
+        "fanout_topic": args.fanout_topic,
+        "biscuit_attenuate": args.biscuit_attenuate,
+        "biscuit_attenuate_denies": args.biscuit_attenuate_deny,
+        "biscuit_attenuate_checks": args.biscuit_attenuate_check,
+        "biscuit_attenuate_topic": args.biscuit_attenuate_topic,
+        "biscuit_attenuate_operation": args.biscuit_attenuate_op,
+        "biscuit_attenuate_ttl": args.biscuit_attenuate_ttl,
+        "biscuit_public_key_hex": args.biscuit_public_key_hex,
+        "biscuit_public_key_file": args.biscuit_public_key_file,
+        "biscuit_delegate": args.biscuit_delegate,
+        "biscuit_delegate_denies": args.biscuit_delegate_deny,
+        "biscuit_delegate_checks": args.biscuit_delegate_check,
+        "biscuit_delegate_topic": args.biscuit_delegate_topic,
+        "biscuit_delegate_operation": args.biscuit_delegate_op,
+        "biscuit_delegate_ttl": args.biscuit_delegate_ttl,
+        "biscuit_delegate_public_key_hex": args.biscuit_delegate_public_key_hex,
+        "biscuit_delegate_public_key_file": args.biscuit_delegate_public_key_file,
+        "biscuit_delegate_bin": args.biscuit_delegate_bin,
+        "biscuit_delegate_handoff": args.biscuit_delegate_handoff,
+        "biscuit_delegate_handoff_topic": handoff_topic(args),
+        "biscuit_delegate_handoff_nonce": handoff_nonce,
+        "biscuit_delegate_handoff_role": args.biscuit_delegate_handoff_role,
+        "biscuit_delegate_handoff_ready_timeout_seconds": args.biscuit_delegate_handoff_ready_timeout_seconds,
+        "control": {
+            "topic": args.control_topic,
+            "mode": args.control_mode,
+            "payload": args.control_payload,
+            "repeat": args.control_repeat,
+            "qos": args.control_qos,
+            "after_messages": args.control_after_messages,
+            "runtime_username": args.runtime_control_username,
+            "runtime_after_messages": args.runtime_control_after_messages,
+            "runtime_expect_denial": args.runtime_control_expect_denial,
+        },
+        "fanout_churn": {
+            "kind": args.fanout_churn_kind,
+            "after_messages": args.fanout_churn_after_messages,
+            "interval_messages": args.fanout_churn_interval_messages,
+            "max_events": args.fanout_churn_max_events,
+            "settle_ms": args.fanout_churn_settle_ms,
+            "phase_delivery": args.fanout_churn_phase_delivery,
+            "dynamic_security_source": args.fanout_churn_dynamic_security_source,
+            "control_topic": args.fanout_churn_control_topic,
+            "control_payload": args.fanout_churn_control_payload,
+            "sqlite_db": args.fanout_churn_sqlite_db,
+            "sqlite_topic": args.fanout_churn_sqlite_topic,
+            "sqlite_subscribers": args.fanout_churn_sqlite_subscribers,
+        },
+    })
+}
+
+fn fanout_churn_json(
+    args: &Args,
+    mode: &str,
+    state: Option<&FanoutChurnState>,
+    received_by_phase: Option<&[usize]>,
+    phase_events: Option<usize>,
+) -> Value {
+    let enabled = mode == "fanout" && args.fanout_churn_kind.is_some();
+    let triggered = state.is_some_and(|state| state.triggered);
+    let applied_events = state.map_or(0, |state| state.applied_events);
+    let expected_by_phase = state.map(|state| {
+        fanout_phase_publish_counts(args, phase_events.unwrap_or(state.applied_events))
+    });
+    let phases = match (expected_by_phase, received_by_phase) {
+        (Some(expected), Some(received)) if enabled => Value::Array(
+            expected
+                .into_iter()
+                .enumerate()
+                .map(|(phase, published)| {
+                    serde_json::json!({
+                        "phase": phase,
+                        "expected_deliveries": published * args.clients,
+                        "received_deliveries": received.get(phase).copied().unwrap_or(0),
+                        "duration_ms": state
+                            .and_then(|state| state.phase_duration_ms.get(phase).copied()),
+                    })
+                })
+                .collect(),
+        ),
+        _ => Value::Null,
+    };
+    serde_json::json!({
+        "enabled": enabled,
+        "kind": if mode == "fanout" { args.fanout_churn_kind.clone() } else { None },
+        "after_messages": if mode == "fanout" { Some(args.fanout_churn_after_messages) } else { None },
+        "interval_messages": if mode == "fanout" { Some(args.fanout_churn_interval_messages) } else { None },
+        "max_events": if mode == "fanout" { Some(args.fanout_churn_max_events) } else { None },
+        "settle_ms": if mode == "fanout" { Some(args.fanout_churn_settle_ms) } else { None },
+        "triggered": if mode == "fanout" { Some(triggered) } else { None },
+        "applied_events": if mode == "fanout" { Some(applied_events) } else { None },
+        "control_count": if mode == "fanout" { state.map_or(0, |state| state.control_ms.len()) } else { 0 },
+        "phases": phases,
+    })
+}
+
+fn percentile_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> f64 {
+    let rank_numerator = numerator.saturating_mul(sorted.len() - 1);
+    let lo = rank_numerator / denominator;
+    let remainder = rank_numerator % denominator;
+    if remainder == 0 {
+        return sorted[lo];
+    }
+
+    let hi = lo + 1;
+    let weight = usize_as_f64(remainder) / usize_as_f64(denominator);
+    (sorted[hi] - sorted[lo]).mul_add(weight, sorted[lo])
+}
+
+fn summarize(values: &[f64]) -> Summary {
+    if values.is_empty() {
+        return Summary::default();
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let sum = sorted.iter().sum::<f64>();
+    Summary {
+        count: sorted.len(),
+        min_ms: sorted.first().copied(),
+        p50_ms: Some(percentile_ratio(&sorted, 50, 100)),
+        p95_ms: Some(percentile_ratio(&sorted, 95, 100)),
+        p99_ms: Some(percentile_ratio(&sorted, 99, 100)),
+        max_ms: sorted.last().copied(),
+        mean_ms: Some(sum / usize_as_f64(sorted.len())),
+        median_ms: Some(percentile_ratio(&sorted, 50, 100)),
+    }
+}
+
+fn publish_timeout(args: &Args) -> Duration {
+    Duration::from_secs(args.publish_timeout_seconds.max(1))
+}
+
+fn connect_timeout(args: &Args) -> Duration {
+    Duration::from_secs(args.connect_timeout_seconds.max(1))
+}
+
+fn keepalive(args: &Args) -> Duration {
+    Duration::from_secs(u64::from(args.keepalive_seconds.max(1)))
+}
+
+async fn publish_and_wait(
+    client: &rumqttc::AsyncClient,
+    eventloop: &mut rumqttc::EventLoop,
+    topic: &str,
+    payload: Vec<u8>,
+    qos_value: u8,
+    timeout: Duration,
+) -> Result<f64> {
+    let start = Instant::now();
+    client
+        .publish(
+            topic,
+            payload,
+            rumqttc::PublishOptions::new(qos(qos_value)?),
+        )
+        .await?;
+    if qos_value == 0 {
+        poll_until(eventloop, timeout, |event| {
+            matches!(event, Event::Outgoing(Outgoing::Publish(0))).then_some(())
+        })
+        .await?;
+    } else {
+        poll_until(eventloop, timeout, |event| match event {
+            Event::Incoming(Packet::PubAck(puback)) => {
+                let _ = puback_reason_code(puback.reason);
+                Some(())
+            }
+            Event::Incoming(Packet::PubComp(_)) => Some(()),
+            _ => None,
+        })
+        .await?;
+    }
+    Ok(start.elapsed().as_secs_f64() * 1000.0)
+}
+
+async fn publish_tracked_and_wait(
+    client: &rumqttc::AsyncClient,
+    topic: &str,
+    payload: Vec<u8>,
+    qos_value: u8,
+    timeout: Duration,
+) -> Result<f64> {
+    static DIAG_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = DIAG_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let wall_ns = || std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let start = Instant::now();
+    eprintln!("HOLD_TRACE phase=invoke ns={} seq={} topic={}", wall_ns(), seq, topic);
+    let notice = client
+        .publish_tracked(
+            topic,
+            payload,
+            rumqttc::PublishOptions::new(qos(qos_value)?),
+        )
+        .await?;
+    let wait = tokio::time::timeout(timeout, notice.wait_completion_async());
+    eprintln!("HOLD_TRACE phase=deadline ns={} seq={} topic={} budget_ns={}", wall_ns(), seq, topic, timeout.as_nanos());
+    let outcome = wait.await;
+    eprintln!("HOLD_TRACE phase=terminal ns={} seq={} topic={} elapsed_ns={} outcome={:?}", wall_ns(), seq, topic, start.elapsed().as_nanos(), outcome);
+    outcome
+        .map_err(|_| MqttHelperError::Message("publish_timeout".to_string()))?
+        .map_err(|err| MqttHelperError::Message(format!("publish_failed:{err}")))?;
+    Ok(start.elapsed().as_secs_f64() * 1000.0)
+}
+
+async fn publish_with_retain_and_wait(
+    client: &rumqttc::AsyncClient,
+    eventloop: &mut rumqttc::EventLoop,
+    topic: &str,
+    payload: Vec<u8>,
+    qos_value: u8,
+    retain: bool,
+    timeout: Duration,
+) -> Result<f64> {
+    let start = Instant::now();
+    client
+        .publish(
+            topic,
+            payload,
+            rumqttc::PublishOptions::new(qos(qos_value)?).retain(retain),
+        )
+        .await?;
+    if qos_value == 0 {
+        poll_until(eventloop, timeout, |event| {
+            matches!(event, Event::Outgoing(Outgoing::Publish(0))).then_some(())
+        })
+        .await?;
+    } else {
+        poll_until(eventloop, timeout, |event| match event {
+            Event::Incoming(Packet::PubAck(_) | Packet::PubComp(_)) => Some(()),
+            _ => None,
+        })
+        .await?;
+    }
+    Ok(start.elapsed().as_secs_f64() * 1000.0)
+}
+
+async fn subscribe_and_wait(
+    client: &rumqttc::AsyncClient,
+    eventloop: &mut rumqttc::EventLoop,
+    topic: &str,
+    qos_value: u8,
+) -> Result<Vec<u16>> {
+    let notice = client.subscribe_tracked(topic, qos(qos_value)?).await?;
+    let drive_eventloop = async {
+        loop {
+            let _ = eventloop.poll().await?;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), rumqttc::ConnectionError>(())
+    };
+    let suback = tokio::select! {
+        result = notice.wait_async() => {
+            result.map_err(|err| MqttHelperError::Message(format!("subscribe_failed:{err}")))?
+        }
+        result = drive_eventloop => {
+            result?;
+            return Err(MqttHelperError::Message("subscribe_eventloop_stopped".to_string()));
+        }
+        () = tokio::time::sleep(Duration::from_secs(10)) => {
+            return Err(MqttHelperError::Message("subscribe_timeout".to_string()));
+        }
+    };
+    Ok(suback
+        .return_codes
+        .into_iter()
+        .map(gen_tokens::mqtt_helpers::subscribe_reason_code)
+        .collect())
+}
+
+struct HandoffReceiver {
+    client: rumqttc::AsyncClient,
+    eventloop: rumqttc::EventLoop,
+}
+
+async fn subscribe_handoff_receiver(args: &Args, client_id: &str) -> Result<HandoffReceiver> {
+    let topic = handoff_topic(args).ok_or_else(|| {
+        MqttHelperError::Message("biscuit_delegate_handoff_topic is required".to_string())
+    })?;
+    let handoff_password = args
+        .biscuit_delegate_handoff_token
+        .as_deref()
+        .map(decode_token_arg)
+        .transpose()?
+        .unwrap_or_else(|| decode_token_arg(&args.password).unwrap_or_default());
+    let spec = ClientSpec {
+        host: args.host.clone(),
+        port: args.port,
+        client_id: format!("handoff_{client_id}"),
+        username: args.username.clone(),
+        password: handoff_password,
+        keep_alive: keepalive(args),
+        tls: args.tls,
+        tls_ca_file: args.tls_ca_file.clone(),
+        tls_insecure: args.tls_insecure,
+        auth_method: None,
+        auth_data: None,
+    };
+    let (client, mut eventloop, report) =
+        connect(&spec, connect_timeout(args)).await.map_err(|err| {
+            MqttHelperError::Message(format!("delegation_handoff_connect_failed:{err}"))
+        })?;
+    if !report.connect_ok {
+        return Err(MqttHelperError::Message(format!(
+            "delegation_handoff_connect_denied:{:?}",
+            report.connect_reason
+        )));
+    }
+    let codes = subscribe_and_wait(
+        &client,
+        &mut eventloop,
+        &topic,
+        args.biscuit_delegate_handoff_qos,
+    )
+    .await
+    .map_err(|err| {
+        MqttHelperError::Message(format!("delegation_handoff_subscribe_failed:{err}"))
+    })?;
+    if !codes.iter().all(|code| matches!(code, 0..=2)) {
+        return Err(MqttHelperError::Message(format!(
+            "delegation_handoff_subscribe_rc:{}",
+            codes
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )));
+    }
+    Ok(HandoffReceiver { client, eventloop })
+}
+
+async fn wait_for_handoff_token(
+    mut receiver: HandoffReceiver,
+    client_id: &str,
+    nonce: &str,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let password = poll_until(&mut receiver.eventloop, timeout, |event| match event {
+        Event::Incoming(Packet::Publish(publish)) => {
+            let parsed = serde_json::from_slice::<HandoffPayload>(&publish.payload).ok()?;
+            if parsed.client_id != client_id || parsed.nonce != nonce {
+                return None;
+            }
+            let padding = "=".repeat((4 - parsed.token.len() % 4) % 4);
+            general_purpose::URL_SAFE
+                .decode(format!("{}{padding}", parsed.token))
+                .ok()
+        }
+        _ => None,
+    })
+    .await
+    .map_err(|err| MqttHelperError::Message(format!("delegation_handoff_timeout:{err}")))?;
+    let _ = receiver.client.disconnect().await;
+    Ok(password)
+}
+
+async fn receive_handoff_token(args: &Args, client_id: &str, nonce: &str) -> Result<Vec<u8>> {
+    let receiver = subscribe_handoff_receiver(args, client_id).await?;
+    wait_for_handoff_token(
+        receiver,
+        client_id,
+        nonce,
+        Duration::from_secs(args.biscuit_delegate_handoff_ready_timeout_seconds.max(1)),
+    )
+    .await
+}
+
+async fn receive_handoff_tokens(
+    args: &Args,
+    plan: &HandoffPlan,
+) -> (HashMap<String, Vec<u8>>, Vec<f64>, Vec<String>) {
+    let mut tasks = Vec::new();
+    let mut errors = Vec::new();
+    for client_id in plan.tokens.keys() {
+        match subscribe_handoff_receiver(args, client_id).await {
+            Ok(receiver) => {
+                let client_id = client_id.clone();
+                let nonce = plan.nonce.clone();
+                let timeout =
+                    Duration::from_secs(args.biscuit_delegate_handoff_ready_timeout_seconds.max(1));
+                tasks.push(tokio::spawn(async move {
+                    let result =
+                        wait_for_handoff_token(receiver, &client_id, &nonce, timeout).await;
+                    (client_id, result)
+                }));
+            }
+            Err(err) => errors.push(format!(
+                "delegation_handoff_subscribe_failed:{client_id}:{err}"
+            )),
+        }
+    }
+    let (publish_ms, publish_errors) =
+        publish_handoff_tokens(args, &plan.nonce, &plan.tokens).await;
+    errors.extend(publish_errors);
+    let mut passwords = HashMap::new();
+    for task in tasks {
+        match task.await {
+            Ok((client_id, Ok(password))) => {
+                passwords.insert(client_id, password);
+            }
+            Ok((client_id, Err(err))) => {
+                errors.push(format!("delegation_handoff_failed:{client_id}:{err}"));
+            }
+            Err(err) => errors.push(format!("delegation_handoff_join_failed:{err}")),
+        }
+    }
+    (passwords, publish_ms, errors)
+}
+
+async fn publish_handoff_tokens(
+    args: &Args,
+    nonce: &str,
+    tokens: &HashMap<String, String>,
+) -> (Vec<f64>, Vec<String>) {
+    let Some(topic) = handoff_topic(args) else {
+        return (
+            Vec::new(),
+            vec!["biscuit_delegate_handoff_topic is required".to_string()],
+        );
+    };
+    let password = match args
+        .biscuit_delegate_handoff_token
+        .as_deref()
+        .map(decode_token_arg)
+        .transpose()
+    {
+        Ok(Some(password)) => password,
+        Ok(None) => match decode_token_arg(&args.password) {
+            Ok(password) => password,
+            Err(err) => {
+                return (
+                    Vec::new(),
+                    vec![format!("delegation_master_password_failed:{err}")],
+                );
+            }
+        },
+        Err(err) => {
+            return (
+                Vec::new(),
+                vec![format!("delegation_master_password_failed:{err}")],
+            );
+        }
+    };
+    let spec = ClientSpec {
+        host: args.host.clone(),
+        port: args.port,
+        client_id: "delegation_handoff_master".to_string(),
+        username: args.username.clone(),
+        password,
+        keep_alive: keepalive(args),
+        tls: args.tls,
+        tls_ca_file: args.tls_ca_file.clone(),
+        tls_insecure: args.tls_insecure,
+        auth_method: None,
+        auth_data: None,
+    };
+    let Ok((client, mut eventloop, report)) = connect(&spec, connect_timeout(args)).await else {
+        return (
+            Vec::new(),
+            vec!["delegation_master_connect_failed".to_string()],
+        );
+    };
+    let mut publish_ms = Vec::new();
+    let mut errors = Vec::new();
+    if !report.connect_ok {
+        errors.push(format!(
+            "delegation_master_connect_denied:{:?}",
+            report.connect_reason
+        ));
+        return (publish_ms, errors);
+    }
+    for (client_id, token) in tokens {
+        let payload = HandoffPayload {
+            client_id: client_id.clone(),
+            token: token.clone(),
+            nonce: nonce.to_string(),
+        };
+        let publish_result = match serde_json::to_vec(&payload) {
+            Ok(bytes) => {
+                publish_with_retain_and_wait(
+                    &client,
+                    &mut eventloop,
+                    &topic,
+                    bytes,
+                    args.biscuit_delegate_handoff_qos,
+                    handoff_retain(args),
+                    publish_timeout(args),
+                )
+                .await
+            }
+            Err(err) => Err(MqttHelperError::from(err)),
+        };
+        match publish_result {
+            Ok(ms) => publish_ms.push(ms),
+            Err(err) => errors.push(format!("delegation_master_publish_failed:{err}")),
+        }
+    }
+    let _ = client.disconnect().await;
+    (publish_ms, errors)
+}
+
+struct FanoutSubscriber {
+    _client: AsyncClient,
+    eventloop: rumqttc::EventLoop,
+    result: WorkerResult,
+}
+
+struct FanoutPreparedClient {
+    client_id: String,
+    password: Vec<u8>,
+    bootstrap: WorkerBootstrap,
+}
+
+struct FanoutRuntime {
+    handoff_plan: Option<HandoffPlan>,
+    handoff_passwords: HashMap<String, Vec<u8>>,
+    handoff_publish_ms: Vec<f64>,
+    errors: Vec<String>,
+    handoff_required: bool,
+}
+
+struct FanoutMetrics {
+    connect: Vec<f64>,
+    delegation: Vec<f64>,
+    delegation_len: Vec<f64>,
+    attenuation: Vec<f64>,
+    attenuation_len: Vec<f64>,
+    receive: Vec<f64>,
+    received_by_phase: Option<Vec<usize>>,
+    control_notifications: usize,
+    publish_throughput_mps: f64,
+    receive_throughput_mps: f64,
+}
+
+struct FanoutOutputParts<'a> {
+    qos_distribution: Option<&'a QosDistribution>,
+    token_refresh_codes: &'a [u16],
+    runtime: FanoutRuntime,
+    fanout_publish_ms: Vec<f64>,
+    fanout_publish_by_qos: &'a [Vec<f64>; 3],
+    publish_outcomes: FanoutPublishOutcomes,
+    churn_state: &'a FanoutChurnState,
+    phase_events: Option<usize>,
+    metrics: &'a FanoutMetrics,
+}
+
+#[derive(Clone, Copy, Default)]
+struct FanoutPublishOutcomes {
+    attempted_by_qos: [usize; 3],
+    failed_by_qos: [usize; 3],
+}
+
+impl FanoutPublishOutcomes {
+    fn record_attempt(&mut self, qos: u8) {
+        if let Some(attempts) = self.attempted_by_qos.get_mut(usize::from(qos)) {
+            *attempts += 1;
+        }
+    }
+
+    fn record_failure(&mut self, qos: u8) {
+        if let Some(failures) = self.failed_by_qos.get_mut(usize::from(qos)) {
+            *failures += 1;
+        }
+    }
+
+    fn to_json(self, succeeded: usize) -> Value {
+        serde_json::json!({
+            "attempted": self.attempted_by_qos.iter().sum::<usize>(),
+            "succeeded": succeeded,
+            "failed": self.failed_by_qos.iter().sum::<usize>(),
+            "attempted_by_qos": {
+                "qos_0": self.attempted_by_qos[0],
+                "qos_1": self.attempted_by_qos[1],
+                "qos_2": self.attempted_by_qos[2],
+            },
+            "failed_by_qos": {
+                "qos_0": self.failed_by_qos[0],
+                "qos_1": self.failed_by_qos[1],
+                "qos_2": self.failed_by_qos[2],
+            },
+        })
+    }
+}
+
+#[derive(Default)]
+struct FanoutPublishResult {
+    publish_ms: Vec<f64>,
+    publish_by_qos: [Vec<f64>; 3],
+    outcomes: FanoutPublishOutcomes,
+    churn_state: FanoutChurnState,
+}
+
+struct WorkerPublishPlan<'a> {
+    topic: &'a str,
+    control_topic: Option<&'a str>,
+    control_payload: &'a [u8],
+    data_payload: &'a [u8],
+    qos_distribution: Option<&'a QosDistribution>,
+}
+
+struct FanoutMessage {
+    sent_monotonic_ns: u128,
+    sequence_id: Option<usize>,
+    phase: Option<usize>,
+}
+
+fn parse_fanout_message(payload: &[u8]) -> Option<FanoutMessage> {
+    let version_end = payload.iter().position(|byte| *byte == b'|')?;
+    if &payload[..version_end] != FANOUT_PAYLOAD_VERSION.as_bytes() {
+        return None;
+    }
+    let timestamp_start = version_end + 1;
+    let timestamp_end = payload
+        .iter()
+        .skip(timestamp_start)
+        .position(|byte| *byte == b'|')?
+        + timestamp_start;
+    let sent_monotonic_ns = std::str::from_utf8(&payload[timestamp_start..timestamp_end])
+        .ok()?
+        .parse::<u128>()
+        .ok()?;
+    let sequence_start = timestamp_end + 1;
+    let Some(sequence_end_relative) = payload
+        .iter()
+        .skip(sequence_start)
+        .position(|byte| *byte == b'|')
+    else {
+        return Some(FanoutMessage {
+            sent_monotonic_ns,
+            sequence_id: None,
+            phase: None,
+        });
+    };
+    let sequence_end = sequence_start + sequence_end_relative;
+    let sequence_id = std::str::from_utf8(&payload[sequence_start..sequence_end])
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok());
+    let phase_start = sequence_end + 1;
+    let phase = payload
+        .iter()
+        .skip(phase_start)
+        .position(|byte| *byte == b'|')
+        .and_then(|end| {
+            std::str::from_utf8(&payload[phase_start..phase_start + end])
+                .ok()
+                .and_then(|raw| raw.parse::<usize>().ok())
+        });
+    Some(FanoutMessage {
+        sent_monotonic_ns,
+        sequence_id,
+        phase,
+    })
+}
+
+fn fanout_receive_latency_ms(
+    sent_monotonic_ns: u128,
+    received_monotonic_ns: u128,
+    maximum: Duration,
+) -> Result<f64> {
+    let elapsed_ns = received_monotonic_ns
+        .checked_sub(sent_monotonic_ns)
+        .ok_or_else(|| {
+            MqttHelperError::Message("fanout_receive_negative_clock_delta".to_string())
+        })?;
+    if elapsed_ns > maximum.as_nanos() {
+        return Err(MqttHelperError::Message(format!(
+            "fanout_receive_implausible_clock_delta:elapsed_ns={elapsed_ns},max_ns={}",
+            maximum.as_nanos()
+        )));
+    }
+    Ok(elapsed_ns as f64 / 1_000_000.0)
+}
+
+async fn collect_fanout_subscriber(
+    mut subscriber: FanoutSubscriber,
+    expected_messages: usize,
+    publishing_done: Arc<AtomicBool>,
+    churn_receipts: Arc<AtomicUsize>,
+    mut churn_receipt_path: Option<PathBuf>,
+) -> WorkerResult {
+    let drain_timeout = Duration::from_secs(10).max(Duration::from_millis(
+        u64::try_from(expected_messages)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(200),
+    ));
+    let mut drain_deadline = None;
+    let mut last_sequence_id = None;
+    let mut last_sequence_phase = None;
+    while subscriber.result.receive_ms.len() < expected_messages {
+        if publishing_done.load(Ordering::Acquire) {
+            let deadline = drain_deadline.get_or_insert_with(|| Instant::now() + drain_timeout);
+            if Instant::now() >= *deadline {
+                break;
+            }
+        }
+        let Ok(event) =
+            tokio::time::timeout(Duration::from_millis(100), subscriber.eventloop.poll()).await
+        else {
+            continue;
+        };
+        match event {
+            Ok(Event::Incoming(Packet::Publish(publish))) => {
+                if publish.topic.starts_with(b"system_notification/") {
+                    subscriber.result.control_notifications += 1;
+                    continue;
+                }
+                if let Some(message) = parse_fanout_message(&publish.payload) {
+                    if let Some(sequence_id) = message.sequence_id {
+                        match last_sequence_id {
+                            None if message.phase.unwrap_or(0) == 0 && sequence_id != 0 => subscriber
+                                .result
+                                .errors
+                                .push(format!("fanout_sequence_gap:expected=0,actual={sequence_id}")),
+                            Some(last) if sequence_id == last => subscriber
+                                .result
+                                .errors
+                                .push(format!("fanout_sequence_duplicate:{sequence_id}")),
+                            Some(last) if sequence_id < last => subscriber.result.errors.push(
+                                format!("fanout_sequence_out_of_order:previous={last},actual={sequence_id}"),
+                            ),
+                            Some(last)
+                                if message.phase == last_sequence_phase && sequence_id > last + 1 =>
+                            {
+                                subscriber.result.errors.push(format!(
+                                    "fanout_sequence_gap:expected={},actual={sequence_id}",
+                                    last + 1
+                                ));
+                            }
+                            _ => {}
+                        }
+                        if last_sequence_id.is_none_or(|last| sequence_id > last) {
+                            last_sequence_id = Some(sequence_id);
+                            last_sequence_phase = message.phase;
+                        }
+                    }
+                    let now = match monotonic_raw_nanos_now() {
+                        Ok(value) => value,
+                        Err(err) => {
+                            subscriber.result.errors.push(err.to_string());
+                            continue;
+                        }
+                    };
+                    match fanout_receive_latency_ms(message.sent_monotonic_ns, now, drain_timeout) {
+                        Ok(elapsed_ms) => subscriber.result.receive_ms.push(elapsed_ms),
+                        Err(err) => {
+                            subscriber.result.errors.push(err.to_string());
+                            continue;
+                        }
+                    }
+                    if let Some(phase) = message.phase {
+                        *subscriber
+                            .result
+                            .receive_by_churn_phase
+                            .entry(phase)
+                            .or_default() += 1;
+                    }
+                    let receipt_count = churn_receipts.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(path) = churn_receipt_path.as_deref()
+                        && let Err(err) = write_fanout_churn_receipts(path, receipt_count)
+                    {
+                        subscriber
+                            .result
+                            .errors
+                            .push(format!("fanout_churn_receipt_write_failed:{err}"));
+                        churn_receipt_path = None;
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(err) => {
+                subscriber
+                    .result
+                    .errors
+                    .push(format!("receive_failed:{err}"));
+                break;
+            }
+        }
+    }
+    subscriber.result
+}
+
+async fn init_fanout_runtime(args: &Args) -> FanoutRuntime {
+    let handoff_plan = prepare_handoff(args, &args.fanout_topic).await;
+    let handoff_required = handoff_plan.is_some();
+    let mut errors = Vec::new();
+    if let Some(plan) = &handoff_plan {
+        errors.extend(plan.errors.clone());
+    }
+    let mut handoff_passwords = HashMap::new();
+    let mut handoff_publish_ms = Vec::new();
+    if let Some(plan) = &handoff_plan {
+        let (passwords, publish_ms, handoff_errors) = receive_handoff_tokens(args, plan).await;
+        handoff_passwords = passwords;
+        handoff_publish_ms = publish_ms;
+        errors.extend(handoff_errors);
+    }
+    FanoutRuntime {
+        handoff_plan,
+        handoff_passwords,
+        handoff_publish_ms,
+        errors,
+        handoff_required,
+    }
+}
+
+async fn prepare_fanout_client(
+    args: &Args,
+    client_id: String,
+    runtime: &mut FanoutRuntime,
+) -> Option<FanoutPreparedClient> {
+    let mut bootstrap = runtime
+        .handoff_plan
+        .as_ref()
+        .and_then(|plan| plan.workers.get(&client_id).cloned())
+        .unwrap_or_default();
+    let password = if let Some(password) = runtime.handoff_passwords.remove(&client_id) {
+        password
+    } else if runtime.handoff_required {
+        runtime.errors.push(format!(
+            "delegation_handoff_failed:{client_id}:delegation_handoff_missing_token"
+        ));
+        return None;
+    } else {
+        let mut password = match startup_password(args, &client_id, &args.fanout_topic).await {
+            Ok(password) => password,
+            Err(err) => {
+                runtime
+                    .errors
+                    .push(format!("startup_provisioning_failed:{client_id}:{err}"));
+                return None;
+            }
+        };
+        let mut worker_result = WorkerResult::default();
+        if !apply_biscuit_transforms(args, &client_id, &mut worker_result, &mut password.bytes) {
+            runtime.errors.extend(worker_result.errors);
+            return None;
+        }
+        bootstrap.delegation_ms = worker_result.delegation_ms;
+        bootstrap.delegation_len = worker_result.delegation_len;
+        bootstrap.attenuation_ms = worker_result.attenuation_ms;
+        bootstrap.attenuation_len = worker_result.attenuation_len;
+        password.bytes
+    };
+    Some(FanoutPreparedClient {
+        client_id,
+        password,
+        bootstrap,
+    })
+}
+
+async fn connect_fanout_subscriber(
+    args: &Args,
+    prepared: FanoutPreparedClient,
+    subscribe_qos: u8,
+) -> Result<(FanoutSubscriber, bool)> {
+    let spec = ClientSpec {
+        host: args.host.clone(),
+        port: args.port,
+        client_id: prepared.client_id.clone(),
+        username: args.username.clone(),
+        password: prepared.password,
+        keep_alive: keepalive(args),
+        tls: args.tls,
+        tls_ca_file: args.tls_ca_file.clone(),
+        tls_insecure: args.tls_insecure,
+        auth_method: None,
+        auth_data: None,
+    };
+    let (client, mut eventloop, report) = connect(&spec, connect_timeout(args)).await?;
+    let mut result = WorkerResult {
+        connect_ms: Some(report.connect_ms),
+        delegation_ms: prepared.bootstrap.delegation_ms,
+        delegation_len: prepared.bootstrap.delegation_len,
+        attenuation_ms: prepared.bootstrap.attenuation_ms,
+        attenuation_len: prepared.bootstrap.attenuation_len,
+        ..WorkerResult::default()
+    };
+    if !report.connect_ok {
+        result
+            .errors
+            .push(format!("connect_denied:{:?}", report.connect_reason));
+        return Ok((
+            FanoutSubscriber {
+                _client: client,
+                eventloop,
+                result,
+            },
+            false,
+        ));
+    }
+    match subscribe_and_wait(&client, &mut eventloop, &args.fanout_topic, subscribe_qos).await {
+        Ok(codes) if codes.iter().all(|code| matches!(code, 0..=2)) => {
+            if args.fanout_expect_control_notification {
+                let notification_topic = format!("system_notification/{}", prepared.client_id);
+                match subscribe_and_wait(&client, &mut eventloop, &notification_topic, 1).await {
+                    Ok(notification_codes)
+                        if notification_codes.iter().all(|code| matches!(code, 0..=2)) => {}
+                    Ok(notification_codes) => result.errors.push(format!(
+                        "control_notification_suback_rejected:{notification_codes:?}"
+                    )),
+                    Err(err) => result
+                        .errors
+                        .push(format!("control_notification_subscribe_failed:{err}")),
+                }
+            }
+            let ready = result.errors.is_empty();
+            Ok((
+                FanoutSubscriber {
+                    _client: client,
+                    eventloop,
+                    result,
+                },
+                ready,
+            ))
+        }
+        Ok(codes) => {
+            result.errors.push(format!(
+                "fanout_suback_rejected:{}",
+                codes
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            Ok((
+                FanoutSubscriber {
+                    _client: client,
+                    eventloop,
+                    result,
+                },
+                false,
+            ))
+        }
+        Err(err) => {
+            result.errors.push(format!("subscribe_failed:{err}"));
+            Ok((
+                FanoutSubscriber {
+                    _client: client,
+                    eventloop,
+                    result,
+                },
+                false,
+            ))
+        }
+    }
+}
+
+async fn build_fanout_subscribers(
+    args: &Args,
+    runtime: &mut FanoutRuntime,
+    subscribe_qos: u8,
+) -> Vec<FanoutSubscriber> {
+    let mut subscribers = Vec::new();
+    for index in 0..args.clients {
+        let client_id = client_id_for(args, index);
+        let Some(prepared) = prepare_fanout_client(args, client_id.clone(), runtime).await else {
+            continue;
+        };
+        match connect_fanout_subscriber(args, prepared, subscribe_qos).await {
+            Ok((subscriber, _)) => subscribers.push(subscriber),
+            Err(err) => runtime
+                .errors
+                .push(format!("connect_failed:{client_id}:{err}")),
+        }
+    }
+    subscribers
+}
+
+fn count_ready_fanout_subscribers(subscribers: &[FanoutSubscriber]) -> usize {
+    subscribers
+        .iter()
+        .filter(|subscriber| subscriber.result.errors.is_empty())
+        .count()
+}
+
+fn fanout_ready_dir(args: &Args) -> Result<PathBuf> {
+    args.fanout_ready_dir
+        .as_deref()
+        .map(resolve_repo_path)
+        .ok_or_else(|| MqttHelperError::Message("fanout_ready_dir is required".to_string()))
+}
+
+fn fanout_ready_path(dir: &Path, client_id: &str) -> PathBuf {
+    dir.join(format!("{client_id}.ready"))
+}
+
+fn fanout_churn_receipt_path(dir: &Path, client_id: &str) -> PathBuf {
+    dir.join(format!("{client_id}.receipts"))
+}
+
+fn write_fanout_churn_receipts(path: &Path, receipts: usize) -> Result<()> {
+    let temporary_path = path.with_extension("receipts.tmp");
+    fs::write(&temporary_path, receipts.to_string())?;
+    fs::rename(temporary_path, path)?;
+    Ok(())
+}
+
+fn fanout_done_path(dir: &Path) -> PathBuf {
+    dir.join("publisher.done")
+}
+
+fn write_fanout_ready(dir: &Path, client_id: &str) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    let payload = serde_json::json!({
+        "client_id": client_id,
+        "ready": true,
+    });
+    fs::write(
+        fanout_ready_path(dir, client_id),
+        serde_json::to_vec(&payload)?,
+    )?;
+    Ok(())
+}
+
+fn write_fanout_done(dir: &Path, applied_events: usize, errors: &[String]) -> Result<()> {
+    fs::create_dir_all(dir)?;
+    let payload = serde_json::json!({
+        "done": true,
+        "fanout_churn_applied_events": applied_events,
+        "errors": errors,
+    });
+    let done_path = fanout_done_path(dir);
+    let temporary_path = dir.join("publisher.done.tmp");
+    fs::write(&temporary_path, serde_json::to_vec(&payload)?)?;
+    fs::rename(temporary_path, done_path)?;
+    Ok(())
+}
+
+async fn wait_for_fanout_ready_files(dir: &Path, client_ids: &[String], timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if client_ids
+            .iter()
+            .all(|client_id| fanout_ready_path(dir, client_id).exists())
+        {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn watch_fanout_done_file(
+    dir: PathBuf,
+    timeout: Duration,
+    done: Arc<AtomicBool>,
+) -> Result<usize> {
+    let done_path = fanout_done_path(&dir);
+    let deadline = Instant::now() + timeout;
+    loop {
+        if done_path.exists() {
+            let payload = fs::read(&done_path)?;
+            let value: Value = serde_json::from_slice(&payload)?;
+            let applied_events = value
+                .get("fanout_churn_applied_events")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    MqttHelperError::Message("fanout_done_missing_churn_applied_events".to_string())
+                })?;
+            done.store(true, Ordering::Release);
+            return Ok(applied_events);
+        }
+        if Instant::now() >= deadline {
+            done.store(true, Ordering::Release);
+            return Err(MqttHelperError::Message("fanout_done_timeout".to_string()));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+enum FanoutChurnReceiptSource<'a> {
+    InMemory(&'a AtomicUsize),
+    Files(&'a [PathBuf]),
+}
+
+fn fanout_churn_receipt_count(source: &FanoutChurnReceiptSource<'_>) -> usize {
+    match source {
+        FanoutChurnReceiptSource::InMemory(confirmed) => confirmed.load(Ordering::Acquire),
+        FanoutChurnReceiptSource::Files(paths) => paths
+            .iter()
+            .filter_map(|path| fs::read_to_string(path).ok())
+            .filter_map(|contents| contents.trim().parse::<usize>().ok())
+            .sum(),
+    }
+}
+
+async fn wait_for_fanout_churn_receipts(
+    source: &FanoutChurnReceiptSource<'_>,
+    expected: usize,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    while fanout_churn_receipt_count(source) < expected {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    true
+}
+
+async fn publish_fanout(
+    args: &Args,
+    publisher: &AsyncClient,
+    publisher_eventloop: &mut rumqttc::EventLoop,
+    qos_distribution: Option<&QosDistribution>,
+    errors: &mut Vec<String>,
+    churn_receipts: Option<FanoutChurnReceiptSource<'_>>,
+) -> FanoutPublishResult {
+    let mut fanout_publish_ms = Vec::new();
+    let mut fanout_publish_by_qos: [Vec<f64>; 3] = Default::default();
+    let mut publish_outcomes = FanoutPublishOutcomes::default();
+    let mut churn_state = FanoutChurnState::default();
+    let mut phase_started = Instant::now();
+    for sequence_id in 0..args.messages {
+        if should_apply_churn(args, sequence_id, &churn_state) {
+            if let Some(receipts) = churn_receipts.as_ref()
+                && let Some(expected) = expected_fanout_churn_receipts(args, sequence_id)
+                && !wait_for_fanout_churn_receipts(
+                    receipts,
+                    expected,
+                    Duration::from_secs(args.fanout_ready_timeout_seconds.max(1)),
+                )
+                .await
+            {
+                errors.push(format!("fanout_churn_receipt_timeout:expected={expected}"));
+            }
+            churn_state
+                .phase_duration_ms
+                .push(phase_started.elapsed().as_secs_f64() * 1000.0);
+            let control_started = Instant::now();
+            if let Some(err) = apply_fanout_churn(args, publisher, publisher_eventloop).await {
+                errors.push(err);
+            } else {
+                churn_state
+                    .control_ms
+                    .push(control_started.elapsed().as_secs_f64() * 1000.0);
+                if args.fanout_churn_settle_ms > 0 {
+                    tokio::time::sleep(Duration::from_millis(args.fanout_churn_settle_ms)).await;
+                }
+                churn_state.triggered = true;
+                churn_state.applied_events += 1;
+                phase_started = Instant::now();
+            }
+        }
+        let publish_qos = qos_distribution.map_or(args.qos, QosDistribution::choose);
+        let sent_monotonic_ns = match monotonic_raw_nanos_now() {
+            Ok(value) => value,
+            Err(err) => {
+                errors.push(err.to_string());
+                break;
+            }
+        };
+        let phase = churn_state.applied_events;
+        let mut payload =
+            format!("{FANOUT_PAYLOAD_VERSION}|{sent_monotonic_ns}|{sequence_id}|{phase}|")
+                .into_bytes();
+        if args.message_size > payload.len() {
+            payload.extend(vec![b'A'; args.message_size - payload.len()]);
+        }
+        publish_outcomes.record_attempt(publish_qos);
+        match publish_and_wait(
+            publisher,
+            publisher_eventloop,
+            &args.fanout_topic,
+            payload,
+            publish_qos,
+            publish_timeout(args),
+        )
+        .await
+        {
+            Ok(ms) => {
+                fanout_publish_ms.push(ms);
+                if let Some(bucket) = fanout_publish_by_qos.get_mut(usize::from(publish_qos)) {
+                    bucket.push(ms);
+                }
+            }
+            Err(err) => {
+                publish_outcomes.record_failure(publish_qos);
+                errors.push(format!("fanout_publish_failed:{err}"));
+            }
+        }
+    }
+    churn_state
+        .phase_duration_ms
+        .push(phase_started.elapsed().as_secs_f64() * 1000.0);
+    FanoutPublishResult {
+        publish_ms: fanout_publish_ms,
+        publish_by_qos: fanout_publish_by_qos,
+        outcomes: publish_outcomes,
+        churn_state,
+    }
+}
+
+fn spawn_fanout_collectors(
+    subscribers: Vec<FanoutSubscriber>,
+    expected_messages: usize,
+    publishing_done: &Arc<AtomicBool>,
+    churn_receipts: &Arc<AtomicUsize>,
+) -> Vec<tokio::task::JoinHandle<WorkerResult>> {
+    let mut subscriber_tasks = Vec::new();
+    for subscriber in subscribers {
+        subscriber_tasks.push(tokio::spawn(collect_fanout_subscriber(
+            subscriber,
+            expected_messages,
+            Arc::clone(publishing_done),
+            Arc::clone(churn_receipts),
+            None,
+        )));
+    }
+    subscriber_tasks
+}
+
+async fn collect_fanout_results(
+    subscriber_tasks: Vec<tokio::task::JoinHandle<WorkerResult>>,
+) -> Vec<WorkerResult> {
+    let mut results = Vec::new();
+    for task in subscriber_tasks {
+        match task.await {
+            Ok(result) => results.push(result),
+            Err(err) => {
+                let mut result = WorkerResult::default();
+                result
+                    .errors
+                    .push(format!("fanout_receive_join_failed:{err}"));
+                results.push(result);
+            }
+        }
+    }
+    results
+}
+
+async fn connect_fanout_publisher(
+    args: &Args,
+    fallback_password: &[u8],
+) -> Result<(AsyncClient, rumqttc::EventLoop, ConnectReport)> {
+    let publisher_username = args
+        .fanout_publisher_username
+        .clone()
+        .unwrap_or_else(|| args.username.clone());
+    let publisher_password =
+        if let Some(profile) = args.fanout_publisher_password_map_profile.as_deref() {
+            password_map_token(args, profile, "fanout_publisher")?.bytes
+        } else if let Some(password) = args.fanout_publisher_password.as_deref() {
+            decode_token_arg(password)?
+        } else if should_provision_fanout_publisher(args, &publisher_username)? {
+            let kind = resolved_token_issuer_kind(args).ok_or_else(|| {
+                MqttHelperError::Message(
+                    "strict multi-client startup provisioning requires token kind".to_string(),
+                )
+            })?;
+            fetch_token(args, &kind, "fanout_publisher", &args.fanout_topic)
+                .await?
+                .bytes
+        } else {
+            fallback_password.to_vec()
+        };
+    let publisher_spec = ClientSpec {
+        host: args.host.clone(),
+        port: args.port,
+        client_id: "fanout_publisher".to_string(),
+        username: publisher_username,
+        password: publisher_password,
+        keep_alive: keepalive(args),
+        tls: args.tls,
+        tls_ca_file: args.tls_ca_file.clone(),
+        tls_insecure: args.tls_insecure,
+        auth_method: None,
+        auth_data: None,
+    };
+    let (publisher, publisher_eventloop, report) =
+        connect(&publisher_spec, connect_timeout(args)).await?;
+    Ok((publisher, publisher_eventloop, report))
+}
+
+fn fanout_metrics(
+    results: &[WorkerResult],
+    publisher_connect_ms: Option<f64>,
+    fanout_publish_ms: &[f64],
+    duration_s: f64,
+    churn_enabled: bool,
+) -> FanoutMetrics {
+    let receive: Vec<_> = results.iter().flat_map(|r| r.receive_ms.clone()).collect();
+    FanoutMetrics {
+        connect: results
+            .iter()
+            .filter_map(|r| r.connect_ms)
+            .chain(publisher_connect_ms)
+            .collect(),
+        delegation: results.iter().filter_map(|r| r.delegation_ms).collect(),
+        delegation_len: results.iter().filter_map(|r| r.delegation_len).collect(),
+        attenuation: results.iter().filter_map(|r| r.attenuation_ms).collect(),
+        attenuation_len: results.iter().filter_map(|r| r.attenuation_len).collect(),
+        received_by_phase: churn_enabled.then(|| {
+            let mut counts = BTreeMap::new();
+            for result in results {
+                for (phase, received) in &result.receive_by_churn_phase {
+                    *counts.entry(*phase).or_insert(0) += received;
+                }
+            }
+            let phases = counts.keys().next_back().map_or(0, |phase| phase + 1);
+            (0..phases)
+                .map(|phase| counts.get(&phase).copied().unwrap_or(0))
+                .collect()
+        }),
+        control_notifications: results.iter().map(|r| r.control_notifications).sum(),
+        publish_throughput_mps: usize_as_f64(fanout_publish_ms.len()) / duration_s,
+        receive_throughput_mps: usize_as_f64(receive.len()) / duration_s,
+        receive,
+    }
+}
+
+fn fanout_output(args: &Args, parts: FanoutOutputParts<'_>) -> Output {
+    let metrics = parts.metrics;
+    let raw_metrics = serde_json::json!({
+        "connect": metrics.connect.clone(),
+        "token_refresh": [],
+        "token_refresh_len": [],
+        "proactive_refresh": [],
+        "proactive_refresh_len": [],
+        "proactive_refresh_attempt_unix_ms": [],
+        "delegation": metrics.delegation.clone(),
+        "delegation_len": metrics.delegation_len.clone(),
+        "delegation_handoff_publish": parts.runtime.handoff_publish_ms.clone(),
+        "attenuation": metrics.attenuation.clone(),
+        "attenuation_len": metrics.attenuation_len.clone(),
+        "publish": parts.fanout_publish_ms.clone(),
+        "publish_qos_0": parts.fanout_publish_by_qos[0].clone(),
+        "publish_qos_1": parts.fanout_publish_by_qos[1].clone(),
+        "publish_qos_2": parts.fanout_publish_by_qos[2].clone(),
+        "receive": metrics.receive.clone(),
+        "control": parts.churn_state.control_ms.clone(),
+        "control_response": [],
+        "control_injection_delay": [],
+        "sync_connect_barrier_wait": [],
+    });
+    Output {
+        credential_issuance: Vec::new(),
+        inputs: inputs_json(
+            args,
+            "fanout",
+            parts.qos_distribution,
+            parts.token_refresh_codes,
+            parts
+                .runtime
+                .handoff_plan
+                .as_ref()
+                .map(|plan| plan.nonce.as_str()),
+        ),
+        connect: summarize(&metrics.connect),
+        token_refresh: Summary::default(),
+        token_refresh_len: Summary::default(),
+        proactive_refresh: Summary::default(),
+        proactive_refresh_len: Summary::default(),
+        proactive_refresh_attempts: 0,
+        proactive_refresh_successes: 0,
+        proactive_refresh_failures: 0,
+        session_continuity_ok: !args.proactive_refresh,
+        expiry_denial_count: 0,
+        delegation: summarize(&metrics.delegation),
+        delegation_len: summarize(&metrics.delegation_len),
+        delegation_handoff_publish: summarize(&parts.runtime.handoff_publish_ms),
+        attenuation: summarize(&metrics.attenuation),
+        attenuation_len: summarize(&metrics.attenuation_len),
+        authorization_probes: serde_json::json!({"enabled": false}),
+        publish: summarize(&parts.fanout_publish_ms),
+        publish_qos_0: summarize(&parts.fanout_publish_by_qos[0]),
+        publish_qos_1: summarize(&parts.fanout_publish_by_qos[1]),
+        publish_qos_2: summarize(&parts.fanout_publish_by_qos[2]),
+        publish_outcomes: parts
+            .publish_outcomes
+            .to_json(parts.fanout_publish_ms.len()),
+        qos_distribution_actual: serde_json::json!({
+            "qos_0_count": parts.fanout_publish_by_qos[0].len(),
+            "qos_1_count": parts.fanout_publish_by_qos[1].len(),
+            "qos_2_count": parts.fanout_publish_by_qos[2].len(),
+        }),
+        receive: summarize(&metrics.receive),
+        control: summarize(&parts.churn_state.control_ms),
+        control_response: Summary::default(),
+        control_responses: serde_json::json!({"enabled": false}),
+        control_effect: serde_json::json!({
+            "notification_expected": args.fanout_expect_control_notification,
+            "notifications": metrics.control_notifications,
+        }),
+        control_injection_delay: Summary::default(),
+        throughput_mps: metrics.receive_throughput_mps,
+        publish_throughput_mps: metrics.publish_throughput_mps,
+        receive_throughput_mps: metrics.receive_throughput_mps,
+        received_messages: serde_json::json!({
+            "count": metrics.receive.len(),
+            "expected": args.messages * args.clients,
+        }),
+        fanout_churn: fanout_churn_json(
+            args,
+            "fanout",
+            Some(parts.churn_state),
+            metrics.received_by_phase.as_deref(),
+            parts.phase_events,
+        ),
+        sync_connect: sync_connect_json(
+            args,
+            &[],
+            &[],
+            None,
+            &[],
+            &[],
+            None,
+            &parts.runtime.errors,
+        ),
+        reauth_storm: serde_json::json!({"enabled": false}),
+        raw_publish_ms: parts.fanout_publish_ms,
+        raw_metrics,
+        errors: parts.runtime.errors,
+    }
+}
+
+async fn run_fanout(args: Args) -> Result<Output> {
+    let start = Instant::now();
+    let mut runtime = init_fanout_runtime(&args).await;
+    let fallback_password = decode_token_arg(&args.password)?;
+    let qos_distribution = QosDistribution::parse(args.qos_distribution.as_deref())?;
+    let subscribe_qos = qos_distribution
+        .as_ref()
+        .map_or(args.qos, QosDistribution::subscribe_qos);
+    let token_refresh_codes = parse_token_refresh_codes(args.token_refresh_codes.as_deref())?;
+    let mut subscribers = build_fanout_subscribers(&args, &mut runtime, subscribe_qos).await;
+    let ready_subscribers = count_ready_fanout_subscribers(&subscribers);
+    let fanout_ready = ready_subscribers == args.clients;
+    if !fanout_ready {
+        runtime
+            .errors
+            .push("fanout_subscribe_ready_timeout".to_string());
+    }
+    let (publisher, mut publisher_eventloop, publisher_report) =
+        connect_fanout_publisher(&args, &fallback_password).await?;
+    prepare_fanout_control_responses(
+        &args,
+        &publisher,
+        &mut publisher_eventloop,
+        &mut runtime.errors,
+    )
+    .await?;
+    let publishing_done = Arc::new(AtomicBool::new(false));
+    let churn_receipts = Arc::new(AtomicUsize::new(0));
+    let subscriber_tasks = if fanout_ready {
+        Some(spawn_fanout_collectors(
+            std::mem::take(&mut subscribers),
+            args.messages,
+            &publishing_done,
+            &churn_receipts,
+        ))
+    } else {
+        None
+    };
+    let published = if fanout_ready {
+        publish_fanout(
+            &args,
+            &publisher,
+            &mut publisher_eventloop,
+            qos_distribution.as_ref(),
+            &mut runtime.errors,
+            Some(FanoutChurnReceiptSource::InMemory(&churn_receipts)),
+        )
+        .await
+    } else {
+        FanoutPublishResult::default()
+    };
+    let FanoutPublishResult {
+        publish_ms: fanout_publish_ms,
+        publish_by_qos: fanout_publish_by_qos,
+        outcomes: publish_outcomes,
+        churn_state,
+    } = published;
+    publishing_done.store(true, Ordering::Release);
+    let _ = publisher.disconnect().await;
+    let mut results = if let Some(subscriber_tasks) = subscriber_tasks {
+        collect_fanout_results(subscriber_tasks).await
+    } else {
+        subscribers.into_iter().map(|sub| sub.result).collect()
+    };
+    let duration_s = start.elapsed().as_secs_f64().max(1e-9);
+    for result in &mut results {
+        runtime.errors.append(&mut result.errors);
+    }
+    let metrics = fanout_metrics(
+        &results,
+        Some(publisher_report.connect_ms),
+        &fanout_publish_ms,
+        duration_s,
+        args.fanout_churn_kind.is_some(),
+    );
+    Ok(fanout_output(
+        &args,
+        FanoutOutputParts {
+            qos_distribution: qos_distribution.as_ref(),
+            token_refresh_codes: &token_refresh_codes,
+            runtime,
+            fanout_publish_ms,
+            fanout_publish_by_qos: &fanout_publish_by_qos,
+            publish_outcomes,
+            churn_state: &churn_state,
+            phase_events: None,
+            metrics: &metrics,
+        },
+    ))
+}
+
+async fn run_fanout_subscriber(args: Args) -> Result<Output> {
+    let start = Instant::now();
+    let ready_dir = fanout_ready_dir(&args)?;
+    let mut runtime = init_fanout_runtime(&args).await;
+    let qos_distribution = QosDistribution::parse(args.qos_distribution.as_deref())?;
+    let subscribe_qos = qos_distribution
+        .as_ref()
+        .map_or(args.qos, QosDistribution::subscribe_qos);
+    let token_refresh_codes = parse_token_refresh_codes(args.token_refresh_codes.as_deref())?;
+    let mut subscribers = build_fanout_subscribers(&args, &mut runtime, subscribe_qos).await;
+    let ready_subscribers = count_ready_fanout_subscribers(&subscribers);
+    if ready_subscribers != 1 {
+        runtime
+            .errors
+            .push("fanout_subscribe_ready_timeout".to_string());
+    } else {
+        let client_id = client_id_for(&args, 0);
+        if let Err(err) = write_fanout_ready(&ready_dir, &client_id) {
+            runtime
+                .errors
+                .push(format!("fanout_ready_write_failed:{err}"));
+        }
+        if let Err(err) =
+            write_fanout_churn_receipts(&fanout_churn_receipt_path(&ready_dir, &client_id), 0)
+        {
+            runtime
+                .errors
+                .push(format!("fanout_churn_receipt_write_failed:{err}"));
+        }
+    }
+
+    let publishing_done = Arc::new(AtomicBool::new(false));
+    let done_timeout = Duration::from_secs(
+        args.fanout_ready_timeout_seconds.max(1).saturating_add(
+            u64::try_from(args.messages)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(5),
+        ),
+    );
+    let watcher = tokio::spawn(watch_fanout_done_file(
+        ready_dir.clone(),
+        done_timeout,
+        Arc::clone(&publishing_done),
+    ));
+    let results = if ready_subscribers == 1 {
+        if let Some(subscriber) = subscribers.pop() {
+            vec![
+                collect_fanout_subscriber(
+                    subscriber,
+                    args.messages,
+                    Arc::clone(&publishing_done),
+                    Arc::new(AtomicUsize::new(0)),
+                    Some(fanout_churn_receipt_path(
+                        &ready_dir,
+                        &client_id_for(&args, 0),
+                    )),
+                )
+                .await,
+            ]
+        } else {
+            Vec::new()
+        }
+    } else {
+        subscribers.into_iter().map(|sub| sub.result).collect()
+    };
+    let phase_events = match watcher.await {
+        Ok(Ok(applied_events)) => Some(applied_events),
+        Ok(Err(err)) => {
+            runtime.errors.push(err.to_string());
+            None
+        }
+        Err(err) => {
+            runtime
+                .errors
+                .push(format!("fanout_done_join_failed:{err}"));
+            None
+        }
+    };
+
+    let duration_s = start.elapsed().as_secs_f64().max(1e-9);
+    let mut results = results;
+    for result in &mut results {
+        runtime.errors.append(&mut result.errors);
+    }
+    let fanout_publish_by_qos: [Vec<f64>; 3] = Default::default();
+    let fanout_publish_ms = Vec::new();
+    let publish_outcomes = FanoutPublishOutcomes::default();
+    let churn_state = FanoutChurnState::default();
+    let metrics = fanout_metrics(
+        &results,
+        None,
+        &fanout_publish_ms,
+        duration_s,
+        args.fanout_churn_kind.is_some(),
+    );
+    Ok(fanout_output(
+        &args,
+        FanoutOutputParts {
+            qos_distribution: qos_distribution.as_ref(),
+            token_refresh_codes: &token_refresh_codes,
+            runtime,
+            fanout_publish_ms,
+            fanout_publish_by_qos: &fanout_publish_by_qos,
+            publish_outcomes,
+            churn_state: &churn_state,
+            phase_events,
+            metrics: &metrics,
+        },
+    ))
+}
+
+async fn run_fanout_publisher(args: Args) -> Result<Output> {
+    let start = Instant::now();
+    let ready_dir = fanout_ready_dir(&args)?;
+    let mut runtime = FanoutRuntime {
+        handoff_plan: None,
+        handoff_passwords: HashMap::new(),
+        handoff_publish_ms: Vec::new(),
+        errors: Vec::new(),
+        handoff_required: false,
+    };
+    let subscriber_ids = (0..args.clients)
+        .map(|index| client_id_for(&args, index))
+        .collect::<Vec<_>>();
+    let churn_receipt_paths = subscriber_ids
+        .iter()
+        .map(|client_id| fanout_churn_receipt_path(&ready_dir, client_id))
+        .collect::<Vec<_>>();
+    let ready = wait_for_fanout_ready_files(
+        &ready_dir,
+        &subscriber_ids,
+        Duration::from_secs(args.fanout_ready_timeout_seconds.max(1)),
+    )
+    .await;
+    if !ready {
+        runtime
+            .errors
+            .push("fanout_subscribe_ready_timeout".to_string());
+        let _ = write_fanout_done(&ready_dir, 0, &runtime.errors);
+    }
+
+    let fallback_password = decode_token_arg(&args.password)?;
+    let qos_distribution = QosDistribution::parse(args.qos_distribution.as_deref())?;
+    let token_refresh_codes = parse_token_refresh_codes(args.token_refresh_codes.as_deref())?;
+    let published = if ready {
+        let (publisher, mut publisher_eventloop, publisher_report) =
+            connect_fanout_publisher(&args, &fallback_password).await?;
+        prepare_fanout_control_responses(
+            &args,
+            &publisher,
+            &mut publisher_eventloop,
+            &mut runtime.errors,
+        )
+        .await?;
+        let published = publish_fanout(
+            &args,
+            &publisher,
+            &mut publisher_eventloop,
+            qos_distribution.as_ref(),
+            &mut runtime.errors,
+            Some(FanoutChurnReceiptSource::Files(&churn_receipt_paths)),
+        )
+        .await;
+        let _ = publisher.disconnect().await;
+        if let Err(err) = write_fanout_done(
+            &ready_dir,
+            published.churn_state.applied_events,
+            &runtime.errors,
+        ) {
+            runtime
+                .errors
+                .push(format!("fanout_done_write_failed:{err}"));
+        }
+        (published, Some(publisher_report.connect_ms))
+    } else {
+        (FanoutPublishResult::default(), None)
+    };
+    let (published, publisher_connect_ms) = published;
+    let FanoutPublishResult {
+        publish_ms: fanout_publish_ms,
+        publish_by_qos: fanout_publish_by_qos,
+        outcomes: publish_outcomes,
+        churn_state,
+    } = published;
+
+    let duration_s = start.elapsed().as_secs_f64().max(1e-9);
+    let metrics = fanout_metrics(
+        &[],
+        publisher_connect_ms,
+        &fanout_publish_ms,
+        duration_s,
+        args.fanout_churn_kind.is_some(),
+    );
+    Ok(fanout_output(
+        &args,
+        FanoutOutputParts {
+            qos_distribution: qos_distribution.as_ref(),
+            token_refresh_codes: &token_refresh_codes,
+            runtime,
+            fanout_publish_ms,
+            fanout_publish_by_qos: &fanout_publish_by_qos,
+            publish_outcomes,
+            churn_state: &churn_state,
+            phase_events: None,
+            metrics: &metrics,
+        },
+    ))
+}
+
+fn fanout_control_response_topic(args: &Args) -> Option<&str> {
+    (args.fanout_churn_kind.as_deref() == Some("dynamic_security_control")).then(|| {
+        args.control_response_topic
+            .as_deref()
+            .unwrap_or("$CONTROL/dynamic-security/v1/response")
+    })
+}
+
+async fn prepare_fanout_control_responses(
+    args: &Args,
+    publisher: &AsyncClient,
+    publisher_eventloop: &mut rumqttc::EventLoop,
+    errors: &mut Vec<String>,
+) -> Result<()> {
+    let Some(response_topic) = fanout_control_response_topic(args) else {
+        return Ok(());
+    };
+    let codes = subscribe_and_wait(publisher, publisher_eventloop, response_topic, 1).await?;
+    if codes.iter().any(|code| !matches!(code, 0..=2)) {
+        errors.push(format!("fanout_control_response_suback_rejected:{codes:?}"));
+    }
+    Ok(())
+}
+
+async fn resolve_worker_password(
+    args: &Args,
+    client_id: &str,
+    topic: &str,
+    handoff_nonce: Option<&str>,
+    handoff_password: Option<Vec<u8>>,
+    handoff_required: bool,
+    result: &mut WorkerResult,
+) -> Option<(IssuedToken, bool)> {
+    let handoff_password_supplied = handoff_password.is_some();
+    let password = if let Some(value) = handoff_password {
+        IssuedToken::static_token(value)
+    } else if let Some(nonce) = handoff_nonce {
+        match receive_handoff_token(args, client_id, nonce).await {
+            Ok(value) => IssuedToken::static_token(value),
+            Err(err) => {
+                result
+                    .errors
+                    .push(format!("delegation_handoff_failed:{err}"));
+                return None;
+            }
+        }
+    } else if handoff_required {
+        result
+            .errors
+            .push("delegation_handoff_failed:delegation_handoff_missing_token".to_string());
+        return None;
+    } else {
+        match startup_password(args, client_id, topic).await {
+            Ok(value) => value,
+            Err(err) => {
+                result.errors.push(format!("startup_password_failed:{err}"));
+                return None;
+            }
+        }
+    };
+    Some((password, handoff_password_supplied))
+}
+
+async fn fetch_worker_token(
+    args: &Args,
+    kind: &str,
+    client_id: &str,
+    topic: &str,
+    result: &mut WorkerResult,
+) -> Result<IssuedToken> {
+    let mut token = fetch_token(args, kind, client_id, topic).await?;
+    if !apply_biscuit_transforms(args, client_id, result, &mut token.bytes) {
+        let err = result
+            .errors
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "biscuit_transform_failed".to_string());
+        return Err(MqttHelperError::Message(err));
+    }
+    refresh_token_expiry(args, &mut token, true)?;
+    Ok(token)
+}
+
+fn worker_specs(args: &Args, client_id: &str, password: Vec<u8>) -> ClientSpec {
+    if args.proactive_refresh {
+        return ClientSpec {
+            host: args.host.clone(),
+            port: args.port,
+            client_id: client_id.to_string(),
+            username: String::new(),
+            password: Vec::new(),
+            keep_alive: keepalive(args),
+            tls: args.tls,
+            tls_ca_file: args.tls_ca_file.clone(),
+            tls_insecure: args.tls_insecure,
+            auth_method: Some("token".to_string()),
+            auth_data: Some(password),
+        };
+    }
+    ClientSpec {
+        host: args.host.clone(),
+        port: args.port,
+        client_id: client_id.to_string(),
+        username: args.username.clone(),
+        password,
+        keep_alive: keepalive(args),
+        tls: args.tls,
+        tls_ca_file: args.tls_ca_file.clone(),
+        tls_insecure: args.tls_insecure,
+        auth_method: None,
+        auth_data: None,
+    }
+}
+
+async fn connect_worker(
+    args: &Args,
+    client_id: &str,
+    topic: &str,
+    token_refresh_codes: &[u16],
+    apply_refresh_transforms: bool,
+    spec: &mut ClientSpec,
+    result: &mut WorkerResult,
+) -> Option<(AsyncClient, rumqttc::EventLoop, ConnectReport, Option<i64>)> {
+    let mut current_exp = None;
+    loop {
+        let connect_result = match connect(spec, connect_timeout(args)).await {
+            Ok(value) => value,
+            Err(err) => {
+                result.errors.push(format!("connect_failed:{err}"));
+                return None;
+            }
+        };
+        if connect_result.2.connect_ok {
+            return Some((
+                connect_result.0,
+                connect_result.1,
+                connect_result.2,
+                current_exp,
+            ));
+        }
+
+        let reason = connect_result.2.connect_reason.unwrap_or(u16::MAX);
+        result.connect_ms = Some(connect_result.2.connect_ms);
+        if result.token_refresh_ms.is_some()
+            || !token_refresh_codes.contains(&reason)
+            || args.token_issuer_url.is_none()
+        {
+            result.errors.push(format!("connect_denied:{reason:?}"));
+            return None;
+        }
+        let Some(kind) = resolved_token_issuer_kind(args) else {
+            result.errors.push(format!("connect_denied:{reason:?}"));
+            return None;
+        };
+        let started = Instant::now();
+        let refreshed = if apply_refresh_transforms {
+            fetch_worker_token(args, &kind, client_id, topic, result).await
+        } else {
+            fetch_token(args, &kind, client_id, topic).await
+        };
+        match refreshed {
+            Ok(refreshed) => {
+                result.token_refresh_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                result.token_refresh_len = Some(usize_as_f64(refreshed.bytes.len()));
+                current_exp = refreshed.exp;
+                if args.proactive_refresh {
+                    spec.auth_data = Some(refreshed.bytes);
+                } else {
+                    spec.password = refreshed.bytes;
+                }
+            }
+            Err(err) => {
+                result.errors.push(format!("token_refresh_failed:{err}"));
+                return None;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn perform_proactive_reauth(
+    args: &Args,
+    client_id: &str,
+    topic: &str,
+    client: &AsyncClient,
+    current_exp: &mut Option<i64>,
+    result: &mut WorkerResult,
+    shutdown: Option<&Notify>,
+    apply_refresh_transforms: bool,
+    reauth_storm: Option<&ReauthStormGate>,
+) -> bool {
+    if !args.proactive_refresh {
+        return true;
+    }
+    if args.token_issuer_url.is_none() {
+        result
+            .errors
+            .push("proactive_refresh_failed:token_issuer_url_required".to_string());
+        result.proactive_refresh_failures += 1;
+        return false;
+    }
+    let Some(kind) = resolved_token_issuer_kind(args) else {
+        result
+            .errors
+            .push("proactive_refresh_failed:token_kind_required".to_string());
+        result.proactive_refresh_failures += 1;
+        return false;
+    };
+    if let Some(gate) = reauth_storm {
+        let timeout = Duration::from_secs(args.proactive_refresh_timeout_seconds.max(1));
+        if !gate.wait(timeout).await {
+            result.proactive_refresh_failures += 1;
+            result
+                .errors
+                .push("proactive_refresh_failed:reauth_storm_barrier_timeout".to_string());
+            return false;
+        }
+    }
+    result.proactive_refresh_attempts += 1;
+    result.proactive_refresh_attempt_unix_ms.push(unix_ms_now());
+    let started = Instant::now();
+    let refreshed = if apply_refresh_transforms {
+        fetch_worker_token(args, &kind, client_id, topic, result).await
+    } else {
+        fetch_token(args, &kind, client_id, topic).await
+    };
+    let refreshed = match refreshed {
+        Ok(token) => token,
+        Err(err) => {
+            result.proactive_refresh_failures += 1;
+            result
+                .errors
+                .push(format!("proactive_refresh_failed:{err}"));
+            return false;
+        }
+    };
+    let token_len = refreshed.bytes.len();
+    let props = AuthProperties {
+        method: Some("token".to_string()),
+        data: Some(bytes::Bytes::from(refreshed.bytes)),
+        reason: None,
+        user_properties: Vec::new(),
+    };
+    let notice = match client.reauth_tracked(Some(props)).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            result.proactive_refresh_failures += 1;
+            result
+                .errors
+                .push(format!("proactive_refresh_failed:reauth_send:{err}"));
+            return false;
+        }
+    };
+    let timeout = Duration::from_secs(args.proactive_refresh_timeout_seconds.max(1));
+    let wait_reauth = async {
+        if let Some(shutdown) = shutdown {
+            tokio::select! {
+                result = notice.wait_async() => result.map(|_| ()).map_err(|err| err.to_string()),
+                () = shutdown.notified() => Err("reauth_cancelled".to_string()),
+            }
+        } else {
+            notice
+                .wait_async()
+                .await
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        }
+    };
+    let outcome = tokio::select! {
+        result = wait_reauth => result,
+        () = tokio::time::sleep(timeout) => Err("reauth_timeout".to_string()),
+    };
+    match outcome {
+        Ok(()) => {
+            result
+                .proactive_refresh_ms
+                .push(started.elapsed().as_secs_f64() * 1000.0);
+            result.proactive_refresh_len.push(usize_as_f64(token_len));
+            result.proactive_refresh_successes += 1;
+            *current_exp = refreshed.exp;
+            true
+        }
+        Err(err) if err == "reauth_cancelled" => true,
+        Err(err) => {
+            result.proactive_refresh_failures += 1;
+            if expiry_denial_error(&err) {
+                result.expiry_denial_count += 1;
+            }
+            result
+                .errors
+                .push(format!("proactive_refresh_failed:reauth:{err}"));
+            false
+        }
+    }
+}
+
+/// True only for [`rumqttc::ConnectionError::RequestsDone`].
+///
+/// `run_worker` and the runtime-control task retain `AsyncClient` senders for the whole
+/// useful session, so drained request sources are unreachable mid-session in the current
+/// lifecycle. `RequestsDone` can surface on graceful teardown after `disconnect`/drain.
+/// Genuine worker/task faults are caught separately (`publish_failed:*`, join paths),
+/// and result-contract accounting stays the backstop for incomplete workloads.
+fn is_eventloop_requests_done(err: &rumqttc::ConnectionError) -> bool {
+    matches!(err, rumqttc::ConnectionError::RequestsDone)
+}
+
+fn classify_eventloop_poll_error(err: rumqttc::ConnectionError) -> Option<String> {
+    if is_eventloop_requests_done(&err) {
+        None
+    } else {
+        Some(format!("eventloop_failed:{err}"))
+    }
+}
+
+async fn drive_worker_eventloop(
+    mut eventloop: rumqttc::EventLoop,
+    shutdown: Arc<Notify>,
+    shutdown_requested: Arc<AtomicBool>,
+    control_response: Option<(String, mpsc::UnboundedSender<Vec<u8>>)>,
+) -> Option<String> {
+    loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return None;
+        }
+        tokio::select! {
+            () = shutdown.notified() => return None,
+            result = eventloop.poll() => {
+                match result {
+                    Ok(Event::Incoming(Packet::Publish(publish)))
+                        if control_response.as_ref().is_some_and(
+                            |(topic, _)| publish.topic == *topic
+                        ) =>
+                    {
+                        if let Some((_, tx)) = &control_response {
+                            let _ = tx.send(publish.payload.to_vec());
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(err) => return classify_eventloop_poll_error(err),
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_proactive_refresh_timer(
+    args: Args,
+    client_id: String,
+    topic: String,
+    client: AsyncClient,
+    mut current_exp: Option<i64>,
+    shutdown: Arc<Notify>,
+    shutdown_requested: Arc<AtomicBool>,
+    first_attempt_notify: Arc<Notify>,
+    first_attempt_observed: Arc<AtomicBool>,
+    apply_refresh_transforms: bool,
+    reauth_storm: Option<Arc<ReauthStormGate>>,
+) -> WorkerResult {
+    let mut result = WorkerResult::default();
+    if !args.proactive_refresh {
+        return result;
+    }
+    loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return result;
+        }
+        let now = match unix_timestamp_now() {
+            Ok(now) => now,
+            Err(_) => {
+                result
+                    .errors
+                    .push("proactive_refresh_failed:timestamp_unavailable".to_string());
+                result.proactive_refresh_failures += 1;
+                return result;
+            }
+        };
+        let Some(delay) =
+            proactive_refresh_delay(current_exp, args.proactive_refresh_margin_seconds, now)
+        else {
+            return result;
+        };
+        tokio::select! {
+            () = shutdown.notified() => return result,
+            () = tokio::time::sleep(delay) => {}
+        }
+        if shutdown_requested.load(Ordering::Acquire) {
+            return result;
+        }
+        let refresh_ok = perform_proactive_reauth(
+            &args,
+            &client_id,
+            &topic,
+            &client,
+            &mut current_exp,
+            &mut result,
+            Some(&shutdown),
+            apply_refresh_transforms,
+            reauth_storm.as_deref(),
+        )
+        .await;
+        first_attempt_observed.store(true, Ordering::Release);
+        first_attempt_notify.notify_waiters();
+        if !refresh_ok {
+            return result;
+        }
+    }
+}
+
+fn merge_proactive_result(result: &mut WorkerResult, proactive: &mut WorkerResult) {
+    result
+        .proactive_refresh_ms
+        .append(&mut proactive.proactive_refresh_ms);
+    result
+        .proactive_refresh_len
+        .append(&mut proactive.proactive_refresh_len);
+    result.proactive_refresh_attempts += proactive.proactive_refresh_attempts;
+    result.proactive_refresh_successes += proactive.proactive_refresh_successes;
+    result.proactive_refresh_failures += proactive.proactive_refresh_failures;
+    result
+        .proactive_refresh_attempt_unix_ms
+        .append(&mut proactive.proactive_refresh_attempt_unix_ms);
+    result.expiry_denial_count += proactive.expiry_denial_count;
+    result.errors.append(&mut proactive.errors);
+}
+
+async fn run_control_mode(
+    args: &Args,
+    client_id: &str,
+    client: &AsyncClient,
+    control_topic: Option<&str>,
+    control_payload: &[u8],
+    control_response_rx: Option<&mut mpsc::UnboundedReceiver<Vec<u8>>>,
+    result: &mut WorkerResult,
+) {
+    if let Some(control_topic) = control_topic {
+        let mut response_rx = control_response_rx;
+        for repeat in 0..args.control_repeat {
+            publish_control_and_validate(
+                args,
+                client,
+                control_topic,
+                control_payload,
+                format!("{client_id}-{repeat}"),
+                response_rx.as_deref_mut(),
+                result,
+            )
+            .await;
+        }
+    }
+}
+
+fn correlated_control_payload(payload: &[u8], correlation: &str) -> Result<Vec<u8>> {
+    let mut value: Value = serde_json::from_slice(payload)
+        .map_err(|err| MqttHelperError::Message(format!("control_payload_invalid:{err}")))?;
+    let object = value.as_object_mut().ok_or_else(|| {
+        MqttHelperError::Message("control payload must be a JSON object".to_string())
+    })?;
+    let commands = object
+        .get_mut("commands")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| MqttHelperError::Message("control payload missing commands".to_string()))?;
+    for command in commands {
+        let command = command.as_object_mut().ok_or_else(|| {
+            MqttHelperError::Message("control command must be an object".to_string())
+        })?;
+        command.insert(
+            "correlationData".to_string(),
+            Value::String(correlation.to_string()),
+        );
+    }
+    serde_json::to_vec(&value)
+        .map_err(|err| MqttHelperError::Message(format!("control_payload_encode_failed:{err}")))
+}
+
+fn control_command_count(payload: &[u8]) -> Result<usize> {
+    let value: Value = serde_json::from_slice(payload)
+        .map_err(|err| MqttHelperError::Message(format!("control_payload_invalid:{err}")))?;
+    value
+        .get("commands")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .ok_or_else(|| MqttHelperError::Message("control payload missing commands".to_string()))
+}
+
+fn validate_control_response(
+    payload: &[u8],
+    correlation: &str,
+    expected_responses: usize,
+) -> Result<bool> {
+    let value: Value = serde_json::from_slice(payload)
+        .map_err(|err| MqttHelperError::Message(format!("control_response_invalid_json:{err}")))?;
+    let responses = value
+        .get("responses")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            MqttHelperError::Message(format!(
+                "control_response_missing_responses:payload={value}"
+            ))
+        })?;
+    if responses.is_empty() {
+        return Err(MqttHelperError::Message(
+            "control_response_empty_responses".to_string(),
+        ));
+    }
+    let correlated = responses
+        .iter()
+        .filter(|response| {
+            response.get("correlationData").and_then(Value::as_str) == Some(correlation)
+        })
+        .collect::<Vec<_>>();
+    if correlated.is_empty() {
+        return Ok(false);
+    }
+    if correlated.len() != expected_responses {
+        return Err(MqttHelperError::Message(format!(
+            "control_response_count_mismatch:expected={expected_responses}:actual={}",
+            correlated.len()
+        )));
+    }
+    for response in correlated {
+        if let Some(error) = response.get("error").and_then(Value::as_str)
+            && !error.is_empty()
+        {
+            return Err(MqttHelperError::Message(format!(
+                "control_response_command_error:{error}"
+            )));
+        }
+        if response.get("command").and_then(Value::as_str).is_none() {
+            return Err(MqttHelperError::Message(
+                "control_response_missing_command".to_string(),
+            ));
+        }
+    }
+    Ok(true)
+}
+
+#[derive(Default)]
+struct FanoutControlExchangeState {
+    publish_complete: bool,
+    response_complete: bool,
+}
+
+impl FanoutControlExchangeState {
+    const fn is_complete(&self) -> bool {
+        self.publish_complete && self.response_complete
+    }
+
+    fn observe_response(
+        &mut self,
+        payload: &[u8],
+        correlation: &str,
+        expected_responses: usize,
+    ) -> Result<()> {
+        if validate_control_response(payload, correlation, expected_responses)? {
+            self.response_complete = true;
+        }
+        Ok(())
+    }
+}
+
+async fn publish_fanout_control_and_wait(
+    client: &AsyncClient,
+    eventloop: &mut rumqttc::EventLoop,
+    request_topic: &str,
+    request_payload: Vec<u8>,
+    response_topic: &str,
+    correlation: &str,
+    expected_responses: usize,
+) -> Result<()> {
+    let notice = client
+        .publish_tracked(
+            request_topic,
+            request_payload,
+            rumqttc::PublishOptions::new(rumqttc::QoS::AtLeastOnce),
+        )
+        .await?;
+    let mut completion = Box::pin(notice.wait_completion_async());
+    let mut state = FanoutControlExchangeState::default();
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                result = &mut completion, if !state.publish_complete => {
+                    result.map_err(|err| {
+                        MqttHelperError::Message(format!("control_publish_failed:{err}"))
+                    })?;
+                    state.publish_complete = true;
+                }
+                event = eventloop.poll() => {
+                    let event = event?;
+                    if !state.response_complete
+                        && let Event::Incoming(Packet::Publish(response)) = event
+                        && response.topic == response_topic
+                    {
+                        state.observe_response(
+                            &response.payload,
+                            correlation,
+                            expected_responses,
+                        )?;
+                    }
+                }
+            }
+            if state.is_complete() {
+                return Ok::<(), MqttHelperError>(());
+            }
+        }
+    })
+    .await
+    .map_err(|_| MqttHelperError::Message("control_exchange_timeout".to_string()))??;
+    Ok(())
+}
+
+async fn publish_control_and_validate(
+    args: &Args,
+    client: &AsyncClient,
+    topic: &str,
+    payload: &[u8],
+    correlation: String,
+    response_rx: Option<&mut mpsc::UnboundedReceiver<Vec<u8>>>,
+    result: &mut WorkerResult,
+) {
+    let correlated = match correlated_control_payload(payload, &correlation) {
+        Ok(payload) => payload,
+        Err(err) => {
+            result.errors.push(err.to_string());
+            return;
+        }
+    };
+    let expected_responses = match control_command_count(&correlated) {
+        Ok(count) => count,
+        Err(err) => {
+            result.errors.push(err.to_string());
+            return;
+        }
+    };
+    let started = Instant::now();
+    match publish_tracked_and_wait(
+        client,
+        topic,
+        correlated,
+        args.control_qos,
+        publish_timeout(args),
+    )
+    .await
+    {
+        Ok(ms) => result.control_ms.push(ms),
+        Err(err) => {
+            result.errors.push(format!("control_publish_failed:{err}"));
+            return;
+        }
+    }
+    let Some(response_rx) = response_rx else {
+        return;
+    };
+    let response = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let payload = response_rx.recv().await.ok_or_else(|| {
+                MqttHelperError::Message("control_response_channel_closed".to_string())
+            })?;
+            if validate_control_response(&payload, &correlation, expected_responses)? {
+                return Ok::<(), MqttHelperError>(());
+            }
+        }
+    })
+    .await;
+    match response {
+        Ok(Ok(())) => {
+            result.control_response_successes += 1;
+            result
+                .control_response_ms
+                .push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(Err(err)) => {
+            result.control_response_failures += 1;
+            result.errors.push(err.to_string());
+        }
+        Err(_) => {
+            result.control_response_failures += 1;
+            result.errors.push("control_response_timeout".to_string());
+        }
+    }
+}
+
+async fn run_derived_token_subscribe_denial_probe(
+    client: &AsyncClient,
+    topic: &str,
+    result: &mut WorkerResult,
+) {
+    let outcome = async {
+        let notice = client.subscribe_tracked(topic, qos(1)?).await?;
+        let suback = tokio::time::timeout(Duration::from_secs(10), notice.wait_async())
+            .await
+            .map_err(|_| MqttHelperError::Message("derived_token_probe_timeout".to_string()))?
+            .map_err(|err| MqttHelperError::Message(format!("derived_token_probe_failed:{err}")))?;
+        let codes = suback
+            .return_codes
+            .into_iter()
+            .map(gen_tokens::mqtt_helpers::subscribe_reason_code)
+            .collect::<Vec<_>>();
+        if codes.is_empty() || codes.iter().any(|code| matches!(code, 0..=2)) {
+            return Err(MqttHelperError::Message(format!(
+                "derived_token_probe_unexpected_allow:{codes:?}"
+            )));
+        }
+        Ok(())
+    }
+    .await;
+    match outcome {
+        Ok(()) => result.authorization_probe_successes += 1,
+        Err(err) => {
+            result.authorization_probe_failures += 1;
+            result.errors.push(err.to_string());
+        }
+    }
+}
+
+async fn run_publish_mode(
+    args: &Args,
+    client_id: &str,
+    client: &AsyncClient,
+    plan: WorkerPublishPlan<'_>,
+    runtime_control: Option<&RuntimeControlState>,
+    runtime_control_quota: Option<usize>,
+    control_response_rx: Option<&mut mpsc::UnboundedReceiver<Vec<u8>>>,
+    result: &mut WorkerResult,
+) {
+    let mut since_control = 0usize;
+    let external_runtime_control = match external_runtime_control_barrier(args) {
+        Ok(barrier) => barrier,
+        Err(err) => {
+            result
+                .errors
+                .push(format!("runtime_control_barrier_config_failed:{err}"));
+            return;
+        }
+    };
+    let mut local_successful_publishes = 0usize;
+    let mut external_policy_applied = false;
+    if let Some((barrier, 0)) = external_runtime_control.as_ref() {
+        match wait_external_sync_barrier(barrier).await {
+            Ok(_) => external_policy_applied = true,
+            Err(err) => {
+                result
+                    .errors
+                    .push(format!("runtime_control_barrier_failed:{err}"));
+                return;
+            }
+        }
+    }
+    let mut response_rx = control_response_rx;
+    for message_index in 0..args.messages {
+        if let Some(state) = runtime_control
+            && args.runtime_control_expect_denial
+            && !state.applied.load(Ordering::Acquire)
+            && local_successful_publishes >= runtime_control_quota.unwrap_or_default()
+        {
+            while !state.applied.load(Ordering::Acquire) {
+                let notified = state.progress.notified();
+                if state.applied.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
+            }
+        }
+        let publish_qos = plan
+            .qos_distribution
+            .map_or(args.qos, QosDistribution::choose);
+        if let Some(attempts) = result
+            .publish_attempts_by_qos
+            .get_mut(usize::from(publish_qos))
+        {
+            *attempts += 1;
+        }
+        match publish_tracked_and_wait(
+            client,
+            plan.topic,
+            plan.data_payload.to_vec(),
+            publish_qos,
+            publish_timeout(args),
+        )
+        .await
+        {
+            Ok(ms) => {
+                result.publish_ms.push(ms);
+                if let Some(bucket) = result.publish_by_qos.get_mut(usize::from(publish_qos)) {
+                    bucket.push(ms);
+                }
+                if let Some(runtime_control) = runtime_control {
+                    let total = runtime_control
+                        .successful_publishes
+                        .fetch_add(1, Ordering::AcqRel)
+                        + 1;
+                    runtime_control.progress.notify_waiters();
+                    if total >= args.runtime_control_after_messages {
+                        while !runtime_control.applied.load(Ordering::Acquire) {
+                            let notified = runtime_control.progress.notified();
+                            if runtime_control.applied.load(Ordering::Acquire) {
+                                break;
+                            }
+                            notified.await;
+                        }
+                    }
+                }
+                local_successful_publishes += 1;
+                if let Some((barrier, local_after_messages)) = external_runtime_control.as_ref()
+                    && !external_policy_applied
+                    && local_successful_publishes >= *local_after_messages
+                {
+                    match wait_external_sync_barrier(barrier).await {
+                        Ok(_) => external_policy_applied = true,
+                        Err(err) => {
+                            result
+                                .errors
+                                .push(format!("runtime_control_barrier_failed:{err}"));
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                if let Some(failures) = result
+                    .publish_failures_by_qos
+                    .get_mut(usize::from(publish_qos))
+                {
+                    *failures += 1;
+                }
+                if args.runtime_control_expect_denial
+                    && (runtime_control.is_some_and(|state| state.applied.load(Ordering::Acquire))
+                        || external_policy_applied)
+                    && expiry_denial_error(&err.to_string())
+                {
+                    result.policy_denial_count += 1;
+                } else {
+                    result.errors.push(format!("publish_failed:{err}"));
+                }
+                if !args.continue_after_publish_failure {
+                    break;
+                }
+            }
+        }
+        since_control += 1;
+        if control_injection_due(since_control, args.control_after_messages) {
+            if let Some(topic) = plan.control_topic {
+                let start = Instant::now();
+                publish_control_and_validate(
+                    args,
+                    client,
+                    topic,
+                    plan.control_payload,
+                    format!("{client_id}-{message_index}"),
+                    response_rx.as_deref_mut(),
+                    result,
+                )
+                .await;
+                result
+                    .control_injection_ms
+                    .push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            since_control = 0;
+        }
+    }
+}
+
+const fn control_injection_due(messages_since_control: usize, after_messages: usize) -> bool {
+    after_messages > 0 && messages_since_control >= after_messages
+}
+
+async fn run_worker_session(
+    args: &Args,
+    client_id: &str,
+    topic: &str,
+    qos_distribution: Option<&QosDistribution>,
+    client: &AsyncClient,
+    runtime_control: Option<&RuntimeControlState>,
+    runtime_control_quota: Option<usize>,
+    control_response_rx: Option<&mut mpsc::UnboundedReceiver<Vec<u8>>>,
+    result: &mut WorkerResult,
+) {
+    let control_topic = args
+        .runtime_control_username
+        .is_none()
+        .then(|| {
+            args.control_topic
+                .as_deref()
+                .map(|topic| expand_client_template(topic, client_id))
+        })
+        .flatten();
+    let control_payload = expand_control_payload(&load_control_payload(args, result), client_id);
+    let data_payload = vec![b'A'; args.message_size];
+    if args.control_mode {
+        run_control_mode(
+            args,
+            client_id,
+            client,
+            control_topic.as_deref(),
+            &control_payload,
+            control_response_rx,
+            result,
+        )
+        .await;
+    } else {
+        run_publish_mode(
+            args,
+            client_id,
+            client,
+            WorkerPublishPlan {
+                topic,
+                control_topic: control_topic.as_deref(),
+                control_payload: &control_payload,
+                data_payload: &data_payload,
+                qos_distribution,
+            },
+            runtime_control,
+            runtime_control_quota,
+            control_response_rx,
+            result,
+        )
+        .await;
+    }
+}
+
+async fn wait_for_proactive_assertion_attempt(
+    args: &Args,
+    current_exp: Option<i64>,
+    first_attempt_notify: &Notify,
+    first_attempt_observed: &AtomicBool,
+) {
+    if !args.proactive_refresh_assert_continuity || first_attempt_observed.load(Ordering::Acquire) {
+        return;
+    }
+    let timeout = proactive_assertion_wait_timeout(args, current_exp);
+    let wait = async {
+        loop {
+            let notified = first_attempt_notify.notified();
+            if first_attempt_observed.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
+    };
+    let _ = tokio::time::timeout(timeout, wait).await;
+}
+
+async fn run_worker(job: WorkerInvocation) -> WorkerResult {
+    let WorkerInvocation {
+        args,
+        index,
+        bootstrap,
+        handoff_nonce,
+        handoff_password,
+        handoff_required,
+        sync_connect,
+        publish_gate,
+        reauth_storm,
+        runtime_control,
+        runtime_control_quota,
+    } = job;
+    let mut result = WorkerResult::default();
+    let mut publish_gate_participant = PublishGateParticipant::new(publish_gate);
+    let client_id = client_id_for(&args, index);
+    let topic = expand_client_template(&args.topic, &client_id);
+    result.delegation_ms = bootstrap.delegation_ms;
+    result.delegation_len = bootstrap.delegation_len;
+    result.attenuation_ms = bootstrap.attenuation_ms;
+    result.attenuation_len = bootstrap.attenuation_len;
+    let Some((issued_token, handoff_password_supplied)) = resolve_worker_password(
+        &args,
+        &client_id,
+        &topic,
+        handoff_nonce.as_deref(),
+        handoff_password,
+        handoff_required,
+        &mut result,
+    )
+    .await
+    else {
+        return result;
+    };
+    let mut issued_token = issued_token;
+    if let Some(issuance) = issued_token.issuance.take() {
+        result.credential_issuance.push(issuance);
+    }
+    let mut password = issued_token.bytes;
+    let token_refresh_codes = match parse_token_refresh_codes(args.token_refresh_codes.as_deref()) {
+        Ok(codes) => codes,
+        Err(err) => {
+            result
+                .errors
+                .push(format!("token_refresh_codes_failed:{err}"));
+            return result;
+        }
+    };
+    let qos_distribution = match QosDistribution::parse(args.qos_distribution.as_deref()) {
+        Ok(distribution) => distribution,
+        Err(err) => {
+            result.errors.push(format!("qos_distribution_failed:{err}"));
+            return result;
+        }
+    };
+    let apply_refresh_transforms = should_apply_worker_biscuit_transforms(
+        handoff_nonce.as_deref(),
+        handoff_password_supplied,
+        handoff_required,
+    );
+    if apply_refresh_transforms
+        && !apply_biscuit_transforms(&args, &client_id, &mut result, &mut password)
+    {
+        return result;
+    }
+    issued_token.bytes = password.clone();
+    if let Err(err) = refresh_token_expiry(&args, &mut issued_token, apply_refresh_transforms) {
+        result
+            .errors
+            .push(format!("startup_token_expiry_failed:{err}"));
+        return result;
+    }
+    let mut current_exp = issued_token.exp;
+    let mut spec = worker_specs(&args, &client_id, password.clone());
+    match external_sync_barrier(&args) {
+        Ok(Some(barrier)) => match wait_external_sync_barrier(&barrier).await {
+            Ok(report) => {
+                result.sync_barrier_wait_ms = Some(report.wait_ms);
+                result.sync_barrier_released_at_unix_ms = report.status.released_at_unix_ms;
+                result.sync_barrier_max_ready_skew_ms = report.status.max_ready_skew_ms;
+            }
+            Err(err) => {
+                result.errors.push(format!("sync_barrier_failed:{err}"));
+                return result;
+            }
+        },
+        Ok(None) => {
+            if let Some(sync_connect) = sync_connect {
+                sync_connect.wait().await;
+            }
+        }
+        Err(err) => {
+            result
+                .errors
+                .push(format!("sync_barrier_config_failed:{err}"));
+            return result;
+        }
+    }
+    let Some((client, mut eventloop, report, refreshed_exp)) = connect_worker(
+        &args,
+        &client_id,
+        &topic,
+        &token_refresh_codes,
+        apply_refresh_transforms,
+        &mut spec,
+        &mut result,
+    )
+    .await
+    else {
+        return result;
+    };
+    if refreshed_exp.is_some() {
+        current_exp = refreshed_exp;
+    }
+    result.connect_ms = Some(report.connect_ms);
+
+    let (control_response_tx, mut control_response_rx) = mpsc::unbounded_channel();
+    let control_response_enabled =
+        args.control_response_topic.is_some() && args.runtime_control_username.is_none();
+    if control_response_enabled && let Some(response_topic) = args.control_response_topic.as_deref()
+    {
+        match subscribe_and_wait(&client, &mut eventloop, response_topic, 1).await {
+            Ok(codes) if codes.iter().all(|code| matches!(code, 0..=2)) => {}
+            Ok(codes) => {
+                result
+                    .errors
+                    .push(format!("control_response_suback_rejected:{codes:?}"));
+                return result;
+            }
+            Err(err) => {
+                result
+                    .errors
+                    .push(format!("control_response_subscribe_failed:{err}"));
+                return result;
+            }
+        }
+    }
+
+    // Phase 2 of the two-phase `sync_connect` barrier: hold the measured
+    // publish workload until every participant has connected. This is either
+    // an external cross-container barrier (container-per-client) or the
+    // in-process gate that waits for all local clients to report ready.
+    match external_sync_connect_publish_barrier(&args) {
+        Ok(Some(barrier)) => match wait_external_sync_barrier(&barrier).await {
+            Ok(report) => {
+                result.sync_publish_barrier_wait_ms = Some(report.wait_ms);
+                result.sync_publish_barrier_released_at_unix_ms = report.status.released_at_unix_ms;
+                result.sync_publish_barrier_max_ready_skew_ms = report.status.max_ready_skew_ms;
+            }
+            Err(err) => {
+                result
+                    .errors
+                    .push(format!("sync_publish_barrier_failed:{err}"));
+                return result;
+            }
+        },
+        Ok(None) => {
+            if let Some(gate) = publish_gate_participant.mark_ready() {
+                gate.wait_released().await;
+            }
+        }
+        Err(err) => {
+            result
+                .errors
+                .push(format!("sync_publish_barrier_config_failed:{err}"));
+            return result;
+        }
+    }
+
+    let shutdown = Arc::new(Notify::new());
+    let shutdown_requested = Arc::new(AtomicBool::new(false));
+    let first_attempt_notify = Arc::new(Notify::new());
+    let first_attempt_observed = Arc::new(AtomicBool::new(false));
+    let eventloop_task = tokio::spawn(drive_worker_eventloop(
+        eventloop,
+        Arc::clone(&shutdown),
+        Arc::clone(&shutdown_requested),
+        control_response_enabled.then(|| {
+            (
+                args.control_response_topic.clone().unwrap_or_default(),
+                control_response_tx,
+            )
+        }),
+    ));
+    let proactive_task = tokio::spawn(run_proactive_refresh_timer(
+        args.clone(),
+        client_id.clone(),
+        topic.clone(),
+        client.clone(),
+        current_exp,
+        Arc::clone(&shutdown),
+        Arc::clone(&shutdown_requested),
+        Arc::clone(&first_attempt_notify),
+        Arc::clone(&first_attempt_observed),
+        apply_refresh_transforms,
+        reauth_storm.clone(),
+    ));
+
+    run_worker_session(
+        &args,
+        &client_id,
+        &topic,
+        qos_distribution.as_ref(),
+        &client,
+        runtime_control.as_deref(),
+        runtime_control_quota,
+        control_response_enabled.then_some(&mut control_response_rx),
+        &mut result,
+    )
+    .await;
+    if args.attenuation_probe_subscribe_denied {
+        run_derived_token_subscribe_denial_probe(&client, &topic, &mut result).await;
+    }
+    wait_for_proactive_assertion_attempt(
+        &args,
+        current_exp,
+        &first_attempt_notify,
+        &first_attempt_observed,
+    )
+    .await;
+    let _ = client.disconnect().await;
+    shutdown_requested.store(true, Ordering::Release);
+    shutdown.notify_waiters();
+    match proactive_task.await {
+        Ok(mut proactive_result) => merge_proactive_result(&mut result, &mut proactive_result),
+        Err(err) => result
+            .errors
+            .push(format!("proactive_refresh_join_failed:{err}")),
+    }
+    match eventloop_task.await {
+        Ok(Some(err)) => result.errors.push(err),
+        Ok(None) => {}
+        Err(err) => result.errors.push(format!("eventloop_join_failed:{err}")),
+    }
+    result
+}
+
+async fn collect_worker_results(
+    tasks: Vec<tokio::task::JoinHandle<WorkerResult>>,
+) -> Vec<WorkerResult> {
+    let mut results = Vec::new();
+    for task in tasks {
+        match task.await {
+            Ok(result) => results.push(result),
+            Err(err) => {
+                let mut result = WorkerResult::default();
+                result.errors.push(format!("worker_join_failed:{err}"));
+                results.push(result);
+            }
+        }
+    }
+    results
+}
+
+fn standard_metrics(
+    results: Vec<WorkerResult>,
+    duration_s: f64,
+    handoff_plan: Option<&HandoffPlan>,
+    handoff_publish_ms: Vec<f64>,
+    handoff_errors: Vec<String>,
+) -> StandardMetrics {
+    let connect = results.iter().filter_map(|r| r.connect_ms).collect();
+    let token_refresh = results.iter().filter_map(|r| r.token_refresh_ms).collect();
+    let token_refresh_len = results.iter().filter_map(|r| r.token_refresh_len).collect();
+    let proactive_refresh = results
+        .iter()
+        .flat_map(|r| r.proactive_refresh_ms.clone())
+        .collect();
+    let proactive_refresh_len = results
+        .iter()
+        .flat_map(|r| r.proactive_refresh_len.clone())
+        .collect();
+    let proactive_refresh_attempts = results.iter().map(|r| r.proactive_refresh_attempts).sum();
+    let proactive_refresh_successes = results.iter().map(|r| r.proactive_refresh_successes).sum();
+    let proactive_refresh_failures = results.iter().map(|r| r.proactive_refresh_failures).sum();
+    let proactive_refresh_attempt_unix_ms = results
+        .iter()
+        .flat_map(|r| r.proactive_refresh_attempt_unix_ms.clone())
+        .collect();
+    let expiry_denial_count = results.iter().map(|r| r.expiry_denial_count).sum();
+    let policy_denial_count = results.iter().map(|r| r.policy_denial_count).sum();
+    let delegation = results.iter().filter_map(|r| r.delegation_ms).collect();
+    let delegation_len = results.iter().filter_map(|r| r.delegation_len).collect();
+    let attenuation = results.iter().filter_map(|r| r.attenuation_ms).collect();
+    let attenuation_len = results.iter().filter_map(|r| r.attenuation_len).collect();
+    let authorization_probe_successes = results
+        .iter()
+        .map(|r| r.authorization_probe_successes)
+        .sum();
+    let authorization_probe_failures = results.iter().map(|r| r.authorization_probe_failures).sum();
+    let publish: Vec<_> = results.iter().flat_map(|r| r.publish_ms.clone()).collect();
+    let publish_qos_0 = results
+        .iter()
+        .flat_map(|r| r.publish_by_qos[0].clone())
+        .collect();
+    let publish_qos_1 = results
+        .iter()
+        .flat_map(|r| r.publish_by_qos[1].clone())
+        .collect();
+    let publish_qos_2 = results
+        .iter()
+        .flat_map(|r| r.publish_by_qos[2].clone())
+        .collect();
+    let mut publish_attempts_by_qos = [0usize; 3];
+    let mut publish_failures_by_qos = [0usize; 3];
+    for result in &results {
+        for qos_value in 0..3 {
+            publish_attempts_by_qos[qos_value] += result.publish_attempts_by_qos[qos_value];
+            publish_failures_by_qos[qos_value] += result.publish_failures_by_qos[qos_value];
+        }
+    }
+    let receive: Vec<_> = results.iter().flat_map(|r| r.receive_ms.clone()).collect();
+    let control = results.iter().flat_map(|r| r.control_ms.clone()).collect();
+    let control_response = results
+        .iter()
+        .flat_map(|r| r.control_response_ms.clone())
+        .collect();
+    let control_response_successes = results.iter().map(|r| r.control_response_successes).sum();
+    let control_response_failures = results.iter().map(|r| r.control_response_failures).sum();
+    let control_injection = results
+        .iter()
+        .flat_map(|r| r.control_injection_ms.clone())
+        .collect();
+    let sync_barrier_wait = results
+        .iter()
+        .filter_map(|r| r.sync_barrier_wait_ms)
+        .collect();
+    let sync_barrier_released_at_unix_ms = results
+        .iter()
+        .filter_map(|r| r.sync_barrier_released_at_unix_ms)
+        .collect();
+    let sync_barrier_max_ready_skew_ms = results
+        .iter()
+        .filter_map(|r| r.sync_barrier_max_ready_skew_ms)
+        .fold(None, |max: Option<f64>, value| {
+            Some(max.map_or(value, |current: f64| current.max(value)))
+        });
+    let sync_publish_barrier_wait = results
+        .iter()
+        .filter_map(|r| r.sync_publish_barrier_wait_ms)
+        .collect();
+    let sync_publish_barrier_released_at_unix_ms = results
+        .iter()
+        .filter_map(|r| r.sync_publish_barrier_released_at_unix_ms)
+        .collect();
+    let sync_publish_barrier_max_ready_skew_ms = results
+        .iter()
+        .filter_map(|r| r.sync_publish_barrier_max_ready_skew_ms)
+        .fold(None, |max: Option<f64>, value| {
+            Some(max.map_or(value, |current: f64| current.max(value)))
+        });
+    let credential_issuance = results
+        .iter()
+        .flat_map(|r| r.credential_issuance.clone())
+        .collect();
+    let mut errors: Vec<_> = results.into_iter().flat_map(|r| r.errors).collect();
+    if let Some(plan) = handoff_plan {
+        errors.extend(plan.errors.clone());
+    }
+    errors.extend(handoff_errors);
+    StandardMetrics {
+        publish_throughput_mps: usize_as_f64(publish.len()) / duration_s,
+        receive_throughput_mps: usize_as_f64(receive.len()) / duration_s,
+        credential_issuance,
+        connect,
+        token_refresh,
+        token_refresh_len,
+        proactive_refresh,
+        proactive_refresh_len,
+        proactive_refresh_attempts,
+        proactive_refresh_successes,
+        proactive_refresh_failures,
+        proactive_refresh_attempt_unix_ms,
+        expiry_denial_count,
+        policy_denial_count,
+        runtime_control_connect_ms: None,
+        runtime_control_applied_after_successful_publishes: None,
+        delegation,
+        delegation_len,
+        delegation_handoff_publish: handoff_publish_ms,
+        attenuation,
+        attenuation_len,
+        authorization_probe_successes,
+        authorization_probe_failures,
+        publish,
+        publish_qos_0,
+        publish_qos_1,
+        publish_qos_2,
+        publish_attempts_by_qos,
+        publish_failures_by_qos,
+        receive,
+        control,
+        control_response,
+        control_response_successes,
+        control_response_failures,
+        control_injection,
+        sync_barrier_wait,
+        sync_barrier_released_at_unix_ms,
+        sync_barrier_max_ready_skew_ms,
+        sync_publish_barrier_wait,
+        sync_publish_barrier_released_at_unix_ms,
+        sync_publish_barrier_max_ready_skew_ms,
+        errors,
+    }
+}
+
+fn merge_runtime_control_result(metrics: &mut StandardMetrics, result: WorkerResult) {
+    metrics.runtime_control_connect_ms = result.connect_ms;
+    metrics.runtime_control_applied_after_successful_publishes =
+        result.runtime_control_applied_after_successful_publishes;
+    metrics.control.extend(result.control_ms);
+    metrics.control_response.extend(result.control_response_ms);
+    metrics.control_response_successes += result.control_response_successes;
+    metrics.control_response_failures += result.control_response_failures;
+    metrics.errors.extend(result.errors);
+}
+
+fn max_timestamp_skew_ms(values: &[u128]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    let min = values.iter().min().copied().unwrap_or_default();
+    let max = values.iter().max().copied().unwrap_or_default();
+    Some(max.saturating_sub(min) as f64)
+}
+
+fn reauth_storm_json(args: &Args, metrics: &StandardMetrics, session_continuity_ok: bool) -> Value {
+    if !args.reauth_storm {
+        return serde_json::json!({"enabled": false});
+    }
+    serde_json::json!({
+        "enabled": true,
+        "clients": args.clients,
+        "attempts": metrics.proactive_refresh_attempts,
+        "successes": metrics.proactive_refresh_successes,
+        "failures": metrics.proactive_refresh_failures,
+        "max_refresh_skew_ms": max_timestamp_skew_ms(&metrics.proactive_refresh_attempt_unix_ms),
+        "session_continuity_ok": session_continuity_ok,
+    })
+}
+
+fn standard_output(
+    args: &Args,
+    qos_distribution: Option<&QosDistribution>,
+    token_refresh_codes: &[u16],
+    handoff_nonce: Option<&str>,
+    metrics: StandardMetrics,
+) -> Output {
+    let session_continuity_ok = !args.proactive_refresh
+        || (metrics.proactive_refresh_attempts > 0
+            && metrics.proactive_refresh_failures == 0
+            && metrics.expiry_denial_count == 0);
+    let raw_metrics = serde_json::json!({
+        "connect": metrics.connect.clone(),
+        "token_refresh": metrics.token_refresh.clone(),
+        "token_refresh_len": metrics.token_refresh_len.clone(),
+        "proactive_refresh": metrics.proactive_refresh.clone(),
+        "proactive_refresh_len": metrics.proactive_refresh_len.clone(),
+        "proactive_refresh_attempt_unix_ms": metrics.proactive_refresh_attempt_unix_ms.clone(),
+        "policy_denial_count": metrics.policy_denial_count,
+        "runtime_control_connect_ms": metrics.runtime_control_connect_ms,
+        "runtime_control_applied_after_successful_publishes": metrics
+            .runtime_control_applied_after_successful_publishes,
+        "delegation": metrics.delegation.clone(),
+        "delegation_len": metrics.delegation_len.clone(),
+        "delegation_handoff_publish": metrics.delegation_handoff_publish.clone(),
+        "attenuation": metrics.attenuation.clone(),
+        "attenuation_len": metrics.attenuation_len.clone(),
+        "publish": metrics.publish.clone(),
+        "publish_qos_0": metrics.publish_qos_0.clone(),
+        "publish_qos_1": metrics.publish_qos_1.clone(),
+        "publish_qos_2": metrics.publish_qos_2.clone(),
+        "receive": metrics.receive.clone(),
+        "control": metrics.control.clone(),
+        "control_response": metrics.control_response.clone(),
+        "control_injection_delay": metrics.control_injection.clone(),
+        "sync_connect_barrier_wait": metrics.sync_barrier_wait.clone(),
+        "sync_publish_barrier_wait": metrics.sync_publish_barrier_wait.clone(),
+    });
+    let sync_connect = sync_connect_json(
+        args,
+        &metrics.sync_barrier_wait,
+        &metrics.sync_barrier_released_at_unix_ms,
+        metrics.sync_barrier_max_ready_skew_ms,
+        &metrics.sync_publish_barrier_wait,
+        &metrics.sync_publish_barrier_released_at_unix_ms,
+        metrics.sync_publish_barrier_max_ready_skew_ms,
+        &metrics.errors,
+    );
+    Output {
+        inputs: inputs_json(
+            args,
+            args.mode.as_str(),
+            qos_distribution,
+            token_refresh_codes,
+            handoff_nonce,
+        ),
+        connect: summarize(&metrics.connect),
+        token_refresh: summarize(&metrics.token_refresh),
+        token_refresh_len: summarize(&metrics.token_refresh_len),
+        proactive_refresh: summarize(&metrics.proactive_refresh),
+        proactive_refresh_len: summarize(&metrics.proactive_refresh_len),
+        proactive_refresh_attempts: metrics.proactive_refresh_attempts,
+        proactive_refresh_successes: metrics.proactive_refresh_successes,
+        proactive_refresh_failures: metrics.proactive_refresh_failures,
+        session_continuity_ok,
+        expiry_denial_count: metrics.expiry_denial_count,
+        delegation: summarize(&metrics.delegation),
+        delegation_len: summarize(&metrics.delegation_len),
+        delegation_handoff_publish: summarize(&metrics.delegation_handoff_publish),
+        attenuation: summarize(&metrics.attenuation),
+        attenuation_len: summarize(&metrics.attenuation_len),
+        authorization_probes: serde_json::json!({
+            "enabled": args.attenuation_probe_subscribe_denied,
+            "operation": "subscribe",
+            "expected": "deny",
+            "successes": metrics.authorization_probe_successes,
+            "failures": metrics.authorization_probe_failures,
+        }),
+        publish: summarize(&metrics.publish),
+        publish_qos_0: summarize(&metrics.publish_qos_0),
+        publish_qos_1: summarize(&metrics.publish_qos_1),
+        publish_qos_2: summarize(&metrics.publish_qos_2),
+        publish_outcomes: serde_json::json!({
+            "attempted": metrics.publish_attempts_by_qos.iter().sum::<usize>(),
+            "succeeded": metrics.publish.len(),
+            "failed": metrics.publish_failures_by_qos.iter().sum::<usize>(),
+            "attempted_by_qos": {
+                "qos_0": metrics.publish_attempts_by_qos[0],
+                "qos_1": metrics.publish_attempts_by_qos[1],
+                "qos_2": metrics.publish_attempts_by_qos[2],
+            },
+            "failed_by_qos": {
+                "qos_0": metrics.publish_failures_by_qos[0],
+                "qos_1": metrics.publish_failures_by_qos[1],
+                "qos_2": metrics.publish_failures_by_qos[2],
+            },
+        }),
+        qos_distribution_actual: serde_json::json!({
+            "qos_0_count": metrics.publish_qos_0.len(),
+            "qos_1_count": metrics.publish_qos_1.len(),
+            "qos_2_count": metrics.publish_qos_2.len(),
+        }),
+        receive: summarize(&metrics.receive),
+        control: summarize(&metrics.control),
+        control_response: summarize(&metrics.control_response),
+        control_responses: serde_json::json!({
+            "enabled": args.control_response_topic.is_some(),
+            "successes": metrics.control_response_successes,
+            "failures": metrics.control_response_failures,
+        }),
+        control_effect: serde_json::json!({"notification_expected": false}),
+        control_injection_delay: summarize(&metrics.control_injection),
+        throughput_mps: if args.mode == "fanout" {
+            metrics.receive_throughput_mps
+        } else {
+            metrics.publish_throughput_mps
+        },
+        publish_throughput_mps: metrics.publish_throughput_mps,
+        receive_throughput_mps: metrics.receive_throughput_mps,
+        received_messages: serde_json::json!({
+            "count": metrics.receive.len(),
+            "expected": if args.mode == "fanout" { args.messages * args.clients } else { 0 },
+        }),
+        fanout_churn: fanout_churn_json(args, args.mode.as_str(), None, None, None),
+        sync_connect,
+        reauth_storm: reauth_storm_json(args, &metrics, session_continuity_ok),
+        raw_publish_ms: metrics.publish,
+        raw_metrics,
+        errors: metrics.errors,
+        credential_issuance: metrics.credential_issuance,
+    }
+}
+
+async fn wait_for_runtime_control_threshold(state: &RuntimeControlState, threshold: usize) -> bool {
+    while state.successful_publishes.load(Ordering::Acquire) < threshold
+        && !state.publishers_finished.load(Ordering::Acquire)
+    {
+        let notified = state.progress.notified();
+        if state.successful_publishes.load(Ordering::Acquire) >= threshold
+            || state.publishers_finished.load(Ordering::Acquire)
+        {
+            break;
+        }
+        notified.await;
+    }
+    state.successful_publishes.load(Ordering::Acquire) >= threshold
+}
+
+async fn spawn_runtime_control(
+    args: &Args,
+    state: Arc<RuntimeControlState>,
+) -> Result<tokio::task::JoinHandle<WorkerResult>> {
+    let username = args.runtime_control_username.as_deref().ok_or_else(|| {
+        MqttHelperError::Message("runtime control username is required".to_string())
+    })?;
+    let password = args.runtime_control_password.as_deref().ok_or_else(|| {
+        MqttHelperError::Message("runtime control password is required".to_string())
+    })?;
+    let topic = args
+        .control_topic
+        .as_deref()
+        .ok_or_else(|| MqttHelperError::Message("runtime control topic is required".to_string()))?;
+    if args.runtime_control_after_messages == 0 {
+        return Err(MqttHelperError::Message(
+            "runtime control after-messages must be greater than zero".to_string(),
+        ));
+    }
+
+    let mut payload_result = WorkerResult::default();
+    let payload = load_control_payload(args, &mut payload_result);
+    if !payload_result.errors.is_empty() {
+        return Err(MqttHelperError::Message(payload_result.errors.join(",")));
+    }
+    let spec = ClientSpec {
+        host: args.host.clone(),
+        port: args.port,
+        client_id: "runtime-dynsec-controller".to_string(),
+        username: username.to_string(),
+        password: decode_token_arg(password)?,
+        keep_alive: keepalive(args),
+        tls: args.tls,
+        tls_ca_file: args.tls_ca_file.clone(),
+        tls_insecure: args.tls_insecure,
+        auth_method: None,
+        auth_data: None,
+    };
+    let (client, mut eventloop, report) = connect(&spec, connect_timeout(args)).await?;
+    if !report.connect_ok {
+        return Err(MqttHelperError::Message(format!(
+            "runtime control connect rejected with reason {:?}",
+            report.connect_reason
+        )));
+    }
+
+    let topic = topic.to_string();
+    let threshold = args.runtime_control_after_messages;
+    let control_args = args.clone();
+    let (control_response_tx, mut control_response_rx) = mpsc::unbounded_channel();
+    let response_enabled = args.control_response_topic.is_some();
+    if let Some(response_topic) = args.control_response_topic.as_deref() {
+        let codes = subscribe_and_wait(&client, &mut eventloop, response_topic, 1).await?;
+        if codes.iter().any(|code| !matches!(code, 0..=2)) {
+            return Err(MqttHelperError::Message(format!(
+                "runtime control response subscription rejected: {codes:?}"
+            )));
+        }
+    }
+    Ok(tokio::spawn(async move {
+        let mut result = WorkerResult {
+            connect_ms: Some(report.connect_ms),
+            ..WorkerResult::default()
+        };
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let eventloop_task = tokio::spawn(drive_worker_eventloop(
+            eventloop,
+            Arc::clone(&shutdown),
+            Arc::clone(&shutdown_requested),
+            response_enabled.then(|| {
+                (
+                    control_args
+                        .control_response_topic
+                        .clone()
+                        .unwrap_or_default(),
+                    control_response_tx,
+                )
+            }),
+        ));
+
+        if wait_for_runtime_control_threshold(&state, threshold).await {
+            publish_control_and_validate(
+                &control_args,
+                &client,
+                &topic,
+                &payload,
+                "runtime-controller-0".to_string(),
+                response_enabled.then_some(&mut control_response_rx),
+                &mut result,
+            )
+            .await;
+            if result.errors.is_empty() {
+                result.runtime_control_applied_after_successful_publishes =
+                    Some(state.successful_publishes.load(Ordering::Acquire));
+            }
+        } else {
+            let successful_publishes = state.successful_publishes.load(Ordering::Acquire);
+            result.errors.push(format!(
+                "runtime_control_threshold_unreachable:required={threshold},successful={successful_publishes}"
+            ));
+        }
+        state.applied.store(true, Ordering::Release);
+        state.progress.notify_waiters();
+
+        let _ = client.disconnect().await;
+        shutdown_requested.store(true, Ordering::Release);
+        shutdown.notify_waiters();
+        match eventloop_task.await {
+            Ok(Some(err)) => result.errors.push(err),
+            Ok(None) => {}
+            Err(err) => result
+                .errors
+                .push(format!("runtime_control_eventloop_join_failed:{err}")),
+        }
+        result
+    }))
+}
+
+async fn run_standard_mode(
+    args: Args,
+    qos_distribution: Option<QosDistribution>,
+    token_refresh_codes: Vec<u16>,
+) -> Result<()> {
+    let handoff_plan = prepare_handoff(&args, &args.topic).await;
+    let handoff_nonce = handoff_plan.as_ref().map(|plan| plan.nonce.clone());
+    let handoff_required = handoff_plan.is_some();
+    let mut handoff_errors = Vec::new();
+    let mut handoff_passwords = HashMap::new();
+    let mut handoff_publish_ms = Vec::new();
+    if let Some(plan) = &handoff_plan {
+        let (passwords, publish_ms, errors) = receive_handoff_tokens(&args, plan).await;
+        handoff_passwords = passwords;
+        handoff_publish_ms = publish_ms;
+        handoff_errors = errors;
+    }
+    let mut tasks = Vec::new();
+    let sync_connect = args.sync_connect.then(|| Arc::new(SyncConnectGate::new()));
+    // Phase 2 publish-release gate. When an external publish barrier is
+    // configured (container-per-client), the runner owns the cross-container
+    // release and each single-client process reports ready through it instead
+    // of this in-process gate. Otherwise the in-process gate coordinates all
+    // local clients: publishes are held until every local client has
+    // connected, so an early CONNACK cannot start publishing while a slower
+    // local client is still connecting.
+    let has_external_publish_barrier = external_sync_connect_publish_barrier(&args)?.is_some();
+    let publish_gate =
+        (!has_external_publish_barrier).then(|| Arc::new(PublishStartGate::new(args.clients)));
+    let reauth_storm = args
+        .reauth_storm
+        .then(|| Arc::new(ReauthStormGate::new(args.clients)));
+    let runtime_control = args
+        .runtime_control_username
+        .as_ref()
+        .map(|_| Arc::new(RuntimeControlState::default()));
+    let runtime_control_task = if let Some(state) = &runtime_control {
+        Some(spawn_runtime_control(&args, Arc::clone(state)).await?)
+    } else {
+        None
+    };
+    for index in 0..args.clients {
+        let client_id = client_id_for(&args, index);
+        let bootstrap = handoff_plan
+            .as_ref()
+            .and_then(|plan| plan.workers.get(&client_id).cloned())
+            .unwrap_or_default();
+        tasks.push(tokio::spawn(run_worker(WorkerInvocation {
+            args: args.clone(),
+            index,
+            bootstrap,
+            handoff_nonce: None,
+            handoff_password: handoff_passwords.remove(&client_id),
+            handoff_required,
+            sync_connect: sync_connect.clone(),
+            publish_gate: publish_gate.clone(),
+            reauth_storm: reauth_storm.clone(),
+            runtime_control: runtime_control.clone(),
+            runtime_control_quota: runtime_control.as_ref().map(|_| {
+                args.runtime_control_after_messages / args.clients
+                    + usize::from(index < args.runtime_control_after_messages % args.clients)
+            }),
+        })));
+    }
+
+    let start = if let Some(publish_gate) = &publish_gate {
+        if let Some(sync_connect) = &sync_connect {
+            tokio::time::sleep(SYNC_CONNECT_RELEASE_DELAY).await;
+            sync_connect.release();
+        }
+        if !publish_gate
+            .wait_until_ready_or_unavailable(PUBLISH_RELEASE_READY_TIMEOUT)
+            .await
+        {
+            eprintln!(
+                "sync_connect publish-release gate timed out after {PUBLISH_RELEASE_READY_TIMEOUT:?} \
+                 waiting for {} local client(s) to connect; releasing publishes to avoid deadlock",
+                publish_gate.expected
+            );
+        }
+        let start = Instant::now();
+        publish_gate.release();
+        start
+    } else {
+        let start = Instant::now();
+        if let Some(sync_connect) = &sync_connect {
+            tokio::time::sleep(SYNC_CONNECT_RELEASE_DELAY).await;
+            sync_connect.release();
+        }
+        start
+    };
+    let results = collect_worker_results(tasks).await;
+    if let Some(state) = &runtime_control {
+        state.publishers_finished.store(true, Ordering::Release);
+        state.progress.notify_waiters();
+    }
+    let duration_s = start.elapsed().as_secs_f64().max(1e-9);
+    let mut metrics = standard_metrics(
+        results,
+        duration_s,
+        handoff_plan.as_ref(),
+        handoff_publish_ms,
+        handoff_errors,
+    );
+    if let Some(task) = runtime_control_task {
+        match task.await {
+            Ok(result) => merge_runtime_control_result(&mut metrics, result),
+            Err(err) => metrics
+                .errors
+                .push(format!("runtime_control_join_failed:{err}")),
+        }
+    }
+    if args.runtime_control_expect_denial && metrics.policy_denial_count == 0 {
+        metrics
+            .errors
+            .push("runtime_control_expected_policy_denial_not_observed".to_string());
+    }
+    let output = standard_output(
+        &args,
+        qos_distribution.as_ref(),
+        &token_refresh_codes,
+        handoff_nonce.as_deref(),
+        metrics,
+    );
+    validate_proactive_refresh_assertion(&args, &output)?;
+    emit_output(&args, &output)
+}
+
+fn empty_standard_metrics() -> StandardMetrics {
+    StandardMetrics {
+        connect: Vec::new(),
+        token_refresh: Vec::new(),
+        token_refresh_len: Vec::new(),
+        proactive_refresh: Vec::new(),
+        proactive_refresh_len: Vec::new(),
+        proactive_refresh_attempts: 0,
+        proactive_refresh_successes: 0,
+        proactive_refresh_failures: 0,
+        proactive_refresh_attempt_unix_ms: Vec::new(),
+        expiry_denial_count: 0,
+        policy_denial_count: 0,
+        runtime_control_connect_ms: None,
+        runtime_control_applied_after_successful_publishes: None,
+        delegation: Vec::new(),
+        delegation_len: Vec::new(),
+        delegation_handoff_publish: Vec::new(),
+        attenuation: Vec::new(),
+        attenuation_len: Vec::new(),
+        authorization_probe_successes: 0,
+        authorization_probe_failures: 0,
+        publish: Vec::new(),
+        publish_qos_0: Vec::new(),
+        publish_qos_1: Vec::new(),
+        publish_qos_2: Vec::new(),
+        publish_attempts_by_qos: [0; 3],
+        publish_failures_by_qos: [0; 3],
+        receive: Vec::new(),
+        control: Vec::new(),
+        control_response: Vec::new(),
+        control_response_successes: 0,
+        control_response_failures: 0,
+        control_injection: Vec::new(),
+        sync_barrier_wait: Vec::new(),
+        sync_barrier_released_at_unix_ms: Vec::new(),
+        sync_barrier_max_ready_skew_ms: None,
+        sync_publish_barrier_wait: Vec::new(),
+        sync_publish_barrier_released_at_unix_ms: Vec::new(),
+        sync_publish_barrier_max_ready_skew_ms: None,
+        errors: Vec::new(),
+        publish_throughput_mps: 0.0,
+        receive_throughput_mps: 0.0,
+        credential_issuance: Vec::new(),
+    }
+}
+
+async fn run_handoff_delegator(
+    args: Args,
+    qos_distribution: Option<QosDistribution>,
+    token_refresh_codes: Vec<u16>,
+) -> Result<Output> {
+    let start = Instant::now();
+    let ready_dir = handoff_ready_dir(&args)?;
+    let plan = prepare_handoff(&args, &args.topic).await.ok_or_else(|| {
+        MqttHelperError::Message("biscuit delegation handoff plan required".to_string())
+    })?;
+    let client_ids = (0..args.clients)
+        .map(|index| client_id_for(&args, index))
+        .collect::<Vec<_>>();
+    let mut errors = plan.errors.clone();
+    let ready = wait_for_handoff_ready_files(
+        &ready_dir,
+        &client_ids,
+        &plan.nonce,
+        Duration::from_secs(args.biscuit_delegate_handoff_ready_timeout_seconds.max(1)),
+    )
+    .await;
+    let publish_ms = if ready {
+        match write_handoff_release(&ready_dir, &plan.nonce) {
+            Ok(()) => {
+                let (publish_ms, publish_errors) =
+                    publish_handoff_tokens(&args, &plan.nonce, &plan.tokens).await;
+                errors.extend(publish_errors);
+                publish_ms
+            }
+            Err(err) => {
+                errors.push(format!("delegation_handoff_release_write_failed:{err}"));
+                Vec::new()
+            }
+        }
+    } else {
+        errors.push("delegation_handoff_delegatee_ready_timeout".to_string());
+        Vec::new()
+    };
+    let duration_s = start.elapsed().as_secs_f64().max(1e-9);
+    let mut metrics = empty_standard_metrics();
+    metrics.delegation = plan
+        .workers
+        .values()
+        .filter_map(|worker| worker.delegation_ms)
+        .collect();
+    metrics.delegation_len = plan
+        .workers
+        .values()
+        .filter_map(|worker| worker.delegation_len)
+        .collect();
+    metrics.attenuation = plan
+        .workers
+        .values()
+        .filter_map(|worker| worker.attenuation_ms)
+        .collect();
+    metrics.attenuation_len = plan
+        .workers
+        .values()
+        .filter_map(|worker| worker.attenuation_len)
+        .collect();
+    metrics.delegation_handoff_publish = publish_ms;
+    metrics.publish_throughput_mps =
+        usize_as_f64(metrics.delegation_handoff_publish.len()) / duration_s;
+    metrics.errors = errors;
+    Ok(standard_output(
+        &args,
+        qos_distribution.as_ref(),
+        &token_refresh_codes,
+        Some(&plan.nonce),
+        metrics,
+    ))
+}
+
+async fn run_handoff_delegatee(
+    args: Args,
+    qos_distribution: Option<QosDistribution>,
+    token_refresh_codes: Vec<u16>,
+) -> Result<Output> {
+    let start = Instant::now();
+    let ready_dir = handoff_ready_dir(&args)?;
+    let nonce = args
+        .biscuit_delegate_handoff_nonce
+        .clone()
+        .ok_or_else(|| MqttHelperError::Message("handoff nonce required".to_string()))?;
+    let client_id = client_id_for(&args, 0);
+    let mut handoff_password = None;
+    let mut setup_errors = Vec::new();
+    match subscribe_handoff_receiver(&args, &client_id).await {
+        Ok(receiver) => {
+            if let Err(err) = write_handoff_ready(&ready_dir, &client_id, &nonce) {
+                setup_errors.push(format!("delegation_handoff_ready_write_failed:{err}"));
+            } else if !wait_for_handoff_release_file(
+                &ready_dir,
+                &nonce,
+                Duration::from_secs(args.biscuit_delegate_handoff_ready_timeout_seconds.max(1)),
+            )
+            .await
+            {
+                setup_errors.push("delegation_handoff_release_timeout".to_string());
+            } else {
+                match wait_for_handoff_token(
+                    receiver,
+                    &client_id,
+                    &nonce,
+                    Duration::from_secs(args.biscuit_delegate_handoff_ready_timeout_seconds.max(1)),
+                )
+                .await
+                {
+                    Ok(password) => handoff_password = Some(password),
+                    Err(err) => setup_errors.push(format!("delegation_handoff_failed:{err}")),
+                }
+            }
+        }
+        Err(err) => setup_errors.push(format!("delegation_handoff_subscribe_failed:{err}")),
+    }
+    let mut results = Vec::new();
+    if let Some(password) = handoff_password {
+        let result = run_worker(WorkerInvocation {
+            args: args.clone(),
+            index: 0,
+            bootstrap: WorkerBootstrap::default(),
+            handoff_nonce: None,
+            handoff_password: Some(password),
+            handoff_required: true,
+            sync_connect: None,
+            publish_gate: None,
+            reauth_storm: None,
+            runtime_control: None,
+            runtime_control_quota: None,
+        })
+        .await;
+        results.push(result);
+    } else {
+        let mut result = WorkerResult::default();
+        result.errors.append(&mut setup_errors);
+        results.push(result);
+    }
+    let duration_s = start.elapsed().as_secs_f64().max(1e-9);
+    let mut metrics = standard_metrics(results, duration_s, None, Vec::new(), Vec::new());
+    metrics.errors.extend(setup_errors);
+    Ok(standard_output(
+        &args,
+        qos_distribution.as_ref(),
+        &token_refresh_codes,
+        Some(&nonce),
+        metrics,
+    ))
+}
+
+fn emit_output(args: &Args, output: &Output) -> Result<()> {
+    let rendered = serde_json::to_string_pretty(output)?;
+    if let Some(path) = &args.output_json_file {
+        fs::write(path, rendered.as_bytes())?;
+    }
+    println!("{rendered}");
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut args = Args::parse();
+    if let Some(path) = &args.password_map {
+        if !path.exists() {
+            return Err(MqttHelperError::Message(format!(
+                "password-map file does not exist: {}",
+                path.display()
+            )));
+        }
+        let requested_profiles: HashSet<_> = [
+            args.password_map_profile.as_ref(),
+            args.fanout_publisher_password_map_profile.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+        let selected_profiles = (!requested_profiles.is_empty()).then_some(&requested_profiles);
+        args.password_map_data = Some(Arc::new(load_password_map(path, selected_profiles)?));
+    }
+    if (args.password_map_profile.is_some() || args.fanout_publisher_password_map_profile.is_some())
+        && args.password_map_data.is_none()
+    {
+        return Err(MqttHelperError::Message(
+            "password-map profiles require --password-map".to_string(),
+        ));
+    }
+    apply_legacy_defaults(&mut args);
+    validate_startup_provisioning(&args)?;
+    let qos_distribution = QosDistribution::parse(args.qos_distribution.as_deref())?;
+    let token_refresh_codes = parse_token_refresh_codes(args.token_refresh_codes.as_deref())?;
+    if args.mode == "fanout" {
+        let output = match args.fanout_role.as_str() {
+            "combined" => run_fanout(args.clone()).await?,
+            "subscriber" => run_fanout_subscriber(args.clone()).await?,
+            "publisher" => run_fanout_publisher(args.clone()).await?,
+            other => {
+                return Err(MqttHelperError::Message(format!(
+                    "unknown fanout_role: {other}"
+                )));
+            }
+        };
+        validate_proactive_refresh_assertion(&args, &output)?;
+        return emit_output(&args, &output);
+    }
+    if args.biscuit_delegate_handoff_role == "delegator" {
+        let output =
+            run_handoff_delegator(args.clone(), qos_distribution, token_refresh_codes).await?;
+        validate_proactive_refresh_assertion(&args, &output)?;
+        return emit_output(&args, &output);
+    }
+    if args.biscuit_delegate_handoff_role == "delegatee" {
+        let output =
+            run_handoff_delegatee(args.clone(), qos_distribution, token_refresh_codes).await?;
+        validate_proactive_refresh_assertion(&args, &output)?;
+        return emit_output(&args, &output);
+    }
+    run_standard_mode(args, qos_distribution, token_refresh_codes).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::{CommandFactory, Parser};
+
+    fn output_keys_for(args: &Args, mode: &str) -> Vec<String> {
+        let distribution = QosDistribution::parse(args.qos_distribution.as_deref())
+            .expect("qos distribution should parse");
+        let refresh_codes = parse_token_refresh_codes(args.token_refresh_codes.as_deref())
+            .expect("refresh codes should parse");
+        let output = Output {
+            credential_issuance: Vec::new(),
+            inputs: inputs_json(args, mode, distribution.as_ref(), &refresh_codes, None),
+            connect: Summary::default(),
+            token_refresh: Summary::default(),
+            token_refresh_len: Summary::default(),
+            proactive_refresh: Summary::default(),
+            proactive_refresh_len: Summary::default(),
+            proactive_refresh_attempts: 0,
+            proactive_refresh_successes: 0,
+            proactive_refresh_failures: 0,
+            session_continuity_ok: true,
+            expiry_denial_count: 0,
+            delegation: Summary::default(),
+            delegation_len: Summary::default(),
+            delegation_handoff_publish: Summary::default(),
+            attenuation: Summary::default(),
+            attenuation_len: Summary::default(),
+            authorization_probes: serde_json::json!({"enabled": false}),
+            publish: Summary::default(),
+            publish_qos_0: Summary::default(),
+            publish_qos_1: Summary::default(),
+            publish_qos_2: Summary::default(),
+            publish_outcomes: serde_json::json!({
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "attempted_by_qos": {"qos_0": 0, "qos_1": 0, "qos_2": 0},
+                "failed_by_qos": {"qos_0": 0, "qos_1": 0, "qos_2": 0},
+            }),
+            qos_distribution_actual: serde_json::json!({
+                "qos_0_count": 0,
+                "qos_1_count": 0,
+                "qos_2_count": 0,
+            }),
+            receive: Summary::default(),
+            control: Summary::default(),
+            control_response: Summary::default(),
+            control_responses: serde_json::json!({"enabled": false}),
+            control_effect: serde_json::json!({}),
+            control_injection_delay: Summary::default(),
+            throughput_mps: 0.0,
+            publish_throughput_mps: 0.0,
+            receive_throughput_mps: 0.0,
+            received_messages: serde_json::json!({"count": 0, "expected": 0}),
+            fanout_churn: fanout_churn_json(args, mode, None, None, None),
+            sync_connect: serde_json::json!({"enabled": false}),
+            reauth_storm: serde_json::json!({"enabled": false}),
+            raw_publish_ms: Vec::new(),
+            raw_metrics: serde_json::json!({}),
+            errors: Vec::new(),
+        };
+        let value = serde_json::to_value(output).expect("output should serialize");
+        let mut keys = value
+            .as_object()
+            .expect("output should be an object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    fn env_for(arg_id: &str) -> Option<String> {
+        Args::command()
+            .get_arguments()
+            .find(|arg| arg.get_id() == arg_id)
+            .and_then(|arg| arg.get_env())
+            .map(|env| env.to_string_lossy().into_owned())
+    }
+
+    fn empty_standard_metrics() -> StandardMetrics {
+        StandardMetrics {
+            credential_issuance: Vec::new(),
+            connect: Vec::new(),
+            token_refresh: Vec::new(),
+            token_refresh_len: Vec::new(),
+            proactive_refresh: Vec::new(),
+            proactive_refresh_len: Vec::new(),
+            proactive_refresh_attempts: 0,
+            proactive_refresh_successes: 0,
+            proactive_refresh_failures: 0,
+            proactive_refresh_attempt_unix_ms: Vec::new(),
+            expiry_denial_count: 0,
+            policy_denial_count: 0,
+            runtime_control_connect_ms: None,
+            runtime_control_applied_after_successful_publishes: None,
+            delegation: Vec::new(),
+            delegation_len: Vec::new(),
+            delegation_handoff_publish: Vec::new(),
+            attenuation: Vec::new(),
+            attenuation_len: Vec::new(),
+            authorization_probe_successes: 0,
+            authorization_probe_failures: 0,
+            publish: Vec::new(),
+            publish_qos_0: Vec::new(),
+            publish_qos_1: Vec::new(),
+            publish_qos_2: Vec::new(),
+            publish_attempts_by_qos: [0; 3],
+            publish_failures_by_qos: [0; 3],
+            receive: Vec::new(),
+            control: Vec::new(),
+            control_response: Vec::new(),
+            control_response_successes: 0,
+            control_response_failures: 0,
+            control_injection: Vec::new(),
+            sync_barrier_wait: Vec::new(),
+            sync_barrier_released_at_unix_ms: Vec::new(),
+            sync_barrier_max_ready_skew_ms: None,
+            sync_publish_barrier_wait: Vec::new(),
+            sync_publish_barrier_released_at_unix_ms: Vec::new(),
+            sync_publish_barrier_max_ready_skew_ms: None,
+            errors: Vec::new(),
+            publish_throughput_mps: 0.0,
+            receive_throughput_mps: 0.0,
+        }
+    }
+
+    #[test]
+    fn client_index_start_offsets_generated_client_ids() {
+        let args = Args::parse_from(["mqtt-loadgen", "--client-index-start", "7"]);
+
+        assert_eq!(client_id_for(&args, 0), "client_7");
+        assert_eq!(client_id_for(&args, 2), "client_9");
+    }
+
+    #[test]
+    fn zero_client_index_start_is_rejected() {
+        let args = Args::parse_from(["mqtt-loadgen", "--client-index-start", "0"]);
+
+        assert!(validate_startup_provisioning(&args).is_err());
+    }
+
+    #[test]
+    fn explicit_client_id_requires_single_client() {
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "1",
+            "--client-id",
+            "runtime-dynsec-controller",
+        ]);
+        let invalid = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--client-id",
+            "runtime-dynsec-controller",
+        ]);
+
+        assert_eq!(client_id_for(&valid, 0), "runtime-dynsec-controller");
+        assert!(validate_startup_provisioning(&valid).is_ok());
+        assert!(validate_startup_provisioning(&invalid).is_err());
+    }
+
+    #[test]
+    fn runtime_control_threshold_cannot_exceed_publish_capacity() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--messages",
+            "3",
+            "--runtime-control-username",
+            "admin",
+            "--runtime-control-after-messages",
+            "7",
+        ]);
+
+        let err = validate_startup_provisioning(&args)
+            .expect_err("threshold above publish capacity should be rejected");
+        assert!(
+            err.to_string()
+                .contains("exceeds configured publish capacity")
+        );
+    }
+
+    #[test]
+    fn interleaved_control_requires_complete_reachable_configuration() {
+        for args in [
+            Args::parse_from([
+                "mqtt-loadgen",
+                "--messages",
+                "10",
+                "--control-after-messages",
+                "10",
+                "--control-payload",
+                "{}",
+            ]),
+            Args::parse_from([
+                "mqtt-loadgen",
+                "--messages",
+                "10",
+                "--control-after-messages",
+                "10",
+                "--control-topic",
+                "control/topic",
+            ]),
+            Args::parse_from([
+                "mqtt-loadgen",
+                "--messages",
+                "9",
+                "--control-after-messages",
+                "10",
+                "--control-topic",
+                "control/topic",
+                "--control-payload",
+                "{}",
+            ]),
+        ] {
+            assert!(validate_startup_provisioning(&args).is_err());
+        }
+
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--messages",
+            "10",
+            "--control-after-messages",
+            "10",
+            "--control-topic",
+            "control/topic",
+            "--control-payload",
+            "{}",
+        ]);
+        assert!(validate_startup_provisioning(&valid).is_ok());
+    }
+
+    #[test]
+    fn interleaved_control_is_due_on_the_nth_message() {
+        assert!(!control_injection_due(9, 10));
+        assert!(control_injection_due(10, 10));
+        assert!(!control_injection_due(10, 0));
+    }
+
+    #[test]
+    fn runtime_control_expected_denial_requires_post_control_publish_capacity() {
+        let denied = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--messages",
+            "3",
+            "--runtime-control-username",
+            "admin",
+            "--runtime-control-after-messages",
+            "6",
+            "--runtime-control-expect-denial",
+        ]);
+        let allowed = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--messages",
+            "3",
+            "--runtime-control-username",
+            "admin",
+            "--runtime-control-after-messages",
+            "6",
+        ]);
+
+        let err = validate_startup_provisioning(&denied)
+            .expect_err("expected-denial mode must reserve a post-control publish");
+        assert!(err.to_string().contains("requires after-messages"));
+        assert!(validate_startup_provisioning(&allowed).is_ok());
+    }
+
+    #[test]
+    fn external_runtime_control_requires_complete_single_client_configuration() {
+        let incomplete = Args::parse_from([
+            "mqtt-loadgen",
+            "--runtime-control-barrier-url",
+            "http://sync-barrier:8083",
+        ]);
+        assert!(external_runtime_control_barrier(&incomplete).is_err());
+
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "1",
+            "--messages",
+            "3",
+            "--runtime-control-barrier-url",
+            "http://sync-barrier:8083",
+            "--runtime-control-run-id",
+            "run-1",
+            "--runtime-control-participant-id",
+            "client_1",
+            "--runtime-control-participants",
+            "2",
+            "--runtime-control-local-after-messages",
+            "1",
+        ]);
+        assert!(external_runtime_control_barrier(&valid).unwrap().is_some());
+
+        let invalid_quota = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "1",
+            "--messages",
+            "3",
+            "--runtime-control-barrier-url",
+            "http://sync-barrier:8083",
+            "--runtime-control-run-id",
+            "run-1",
+            "--runtime-control-participant-id",
+            "client_1",
+            "--runtime-control-participants",
+            "2",
+            "--runtime-control-local-after-messages",
+            "4",
+        ]);
+        assert!(external_runtime_control_barrier(&invalid_quota).is_err());
+    }
+
+    #[test]
+    fn runtime_controller_is_excluded_from_worker_connection_metrics() {
+        let workers = vec![
+            WorkerResult {
+                connect_ms: Some(1.0),
+                ..WorkerResult::default()
+            },
+            WorkerResult {
+                connect_ms: Some(2.0),
+                ..WorkerResult::default()
+            },
+        ];
+        let mut metrics = standard_metrics(workers, 1.0, None, Vec::new(), Vec::new());
+        merge_runtime_control_result(
+            &mut metrics,
+            WorkerResult {
+                connect_ms: Some(99.0),
+                runtime_control_applied_after_successful_publishes: Some(12),
+                control_ms: vec![3.0],
+                errors: vec!["controller-warning".to_string()],
+                ..WorkerResult::default()
+            },
+        );
+
+        assert_eq!(metrics.connect, vec![1.0, 2.0]);
+        assert_eq!(metrics.runtime_control_connect_ms, Some(99.0));
+        assert_eq!(
+            metrics.runtime_control_applied_after_successful_publishes,
+            Some(12)
+        );
+        assert_eq!(metrics.control, vec![3.0]);
+        assert_eq!(metrics.errors, vec!["controller-warning"]);
+    }
+
+    #[test]
+    fn fanout_connection_metrics_include_publisher_and_subscribers() {
+        let subscribers = vec![
+            WorkerResult {
+                connect_ms: Some(1.0),
+                ..WorkerResult::default()
+            },
+            WorkerResult {
+                connect_ms: Some(2.0),
+                ..WorkerResult::default()
+            },
+        ];
+        let metrics = fanout_metrics(&subscribers, Some(3.0), &[], 1.0, false);
+        assert_eq!(metrics.connect, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[tokio::test]
+    async fn runtime_control_wait_can_be_released_when_publishers_finish_early() {
+        let state = Arc::new(RuntimeControlState::default());
+        let waiting_state = Arc::clone(&state);
+        let waiter =
+            tokio::spawn(
+                async move { wait_for_runtime_control_threshold(&waiting_state, 2).await },
+            );
+
+        state.successful_publishes.store(1, Ordering::Release);
+        state.publishers_finished.store(true, Ordering::Release);
+        state.progress.notify_waiters();
+
+        let reached = tokio::time::timeout(Duration::from_millis(100), waiter)
+            .await
+            .expect("runtime control waiter should stop")
+            .expect("runtime control waiter should not panic");
+        assert!(!reached);
+    }
+
+    #[test]
+    fn external_sync_barrier_requires_single_client_and_complete_config() {
+        let incomplete = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--sync-connect-barrier-url",
+            "http://sync-barrier:8083",
+        ]);
+        assert!(external_sync_barrier(&incomplete).is_err());
+
+        let multi_client = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "2",
+            "--sync-connect-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-run-id",
+            "run-1",
+            "--sync-connect-participant-id",
+            "client_1",
+            "--sync-connect-participants",
+            "2",
+        ]);
+        assert!(external_sync_barrier(&multi_client).is_err());
+
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "1",
+            "--sync-connect-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-run-id",
+            "run-1",
+            "--sync-connect-participant-id",
+            "client_1",
+            "--sync-connect-participants",
+            "2",
+        ]);
+        assert!(external_sync_barrier(&valid).unwrap().is_some());
+    }
+
+    #[test]
+    fn external_sync_connect_publish_barrier_requires_sync_connect_and_complete_config() {
+        let no_sync = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "1",
+            "--sync-connect-publish-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-publish-run-id",
+            "run-1-publish-0",
+            "--sync-connect-publish-participant-id",
+            "client_1",
+            "--sync-connect-publish-participants",
+            "2",
+        ]);
+        assert!(external_sync_connect_publish_barrier(&no_sync).is_err());
+
+        let incomplete = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "1",
+            "--sync-connect-publish-barrier-url",
+            "http://sync-barrier:8083",
+        ]);
+        assert!(external_sync_connect_publish_barrier(&incomplete).is_err());
+
+        let multi_client = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "2",
+            "--sync-connect-publish-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-publish-run-id",
+            "run-1-publish-0",
+            "--sync-connect-publish-participant-id",
+            "client_1",
+            "--sync-connect-publish-participants",
+            "2",
+        ]);
+        assert!(external_sync_connect_publish_barrier(&multi_client).is_err());
+
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "1",
+            "--sync-connect-publish-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-publish-run-id",
+            "run-1-publish-0",
+            "--sync-connect-publish-participant-id",
+            "client_1",
+            "--sync-connect-publish-participants",
+            "2",
+        ]);
+        assert!(
+            external_sync_connect_publish_barrier(&valid)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn keepalive_defaults_to_sixty_seconds() {
+        let args = Args::parse_from(["mqtt-loadgen"]);
+        assert_eq!(args.keepalive_seconds, DEFAULT_KEEPALIVE_SECONDS);
+        assert_eq!(keepalive(&args), Duration::from_secs(60));
+        assert_eq!(
+            worker_specs(&args, "client_1", Vec::new()).keep_alive,
+            Duration::from_secs(60)
+        );
+    }
+
+    #[test]
+    fn keepalive_cli_override_propagates_to_client_spec_and_inputs() {
+        let args = Args::parse_from(["mqtt-loadgen", "--keepalive-seconds", "215"]);
+        assert_eq!(keepalive(&args), Duration::from_secs(215));
+        assert_eq!(
+            worker_specs(&args, "client_1", Vec::new()).keep_alive,
+            Duration::from_secs(215)
+        );
+        let inputs = inputs_json(&args, "publish", None, &[], None);
+        assert_eq!(inputs["keepalive_seconds"], serde_json::json!(215));
+    }
+
+    #[test]
+    fn sync_connect_json_is_topology_independent() {
+        let in_process = Args::parse_from(["mqtt-loadgen", "--sync-connect", "--clients", "1"]);
+        let rendered = sync_connect_json(&in_process, &[], &[], None, &[], &[], None, &[]);
+        assert_eq!(rendered["enabled"], serde_json::json!(true));
+        assert_eq!(rendered["barrier"], serde_json::json!("in_process"));
+        assert_eq!(rendered["participants"], serde_json::json!(1));
+        assert_eq!(rendered["ready_count"], serde_json::json!(1));
+        assert_eq!(rendered["max_ready_skew_ms"], serde_json::json!(0.0));
+
+        let external = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "1",
+            "--sync-connect-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-run-id",
+            "run-1",
+            "--sync-connect-participant-id",
+            "client_1",
+            "--sync-connect-participants",
+            "2",
+        ]);
+        let rendered = sync_connect_json(
+            &external,
+            &[5.0],
+            &[1_760_000_000_000],
+            Some(12.4),
+            &[],
+            &[],
+            None,
+            &[],
+        );
+        assert_eq!(rendered["barrier"], serde_json::json!("external"));
+        assert_eq!(
+            rendered["max_ready_skew_ms"],
+            serde_json::json!(12.4),
+            "external barriers must surface the server-observed ready skew"
+        );
+
+        let disabled = Args::parse_from(["mqtt-loadgen"]);
+        assert_eq!(
+            sync_connect_json(&disabled, &[], &[], None, &[], &[], None, &[]),
+            serde_json::json!({"enabled": false})
+        );
+    }
+
+    #[test]
+    fn sync_connect_json_reports_two_phases() {
+        let external_publish = Args::parse_from([
+            "mqtt-loadgen",
+            "--sync-connect",
+            "--clients",
+            "1",
+            "--sync-connect-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-run-id",
+            "run-1",
+            "--sync-connect-participant-id",
+            "client_1",
+            "--sync-connect-participants",
+            "3",
+            "--sync-connect-publish-barrier-url",
+            "http://sync-barrier:8083",
+            "--sync-connect-publish-run-id",
+            "run-1-publish-0",
+            "--sync-connect-publish-participant-id",
+            "client_1",
+            "--sync-connect-publish-participants",
+            "3",
+        ]);
+        let rendered = sync_connect_json(
+            &external_publish,
+            &[5.0; 3],
+            &[1_760_000_000_000],
+            Some(12.4),
+            &[7.0; 3],
+            &[1_760_000_000_500],
+            Some(9.1),
+            &[],
+        );
+        assert_eq!(rendered["barrier"], serde_json::json!("external"));
+        assert_eq!(
+            rendered["publish_barrier"]["barrier"],
+            serde_json::json!("external"),
+            "the second phase must be reported separately from the connect phase"
+        );
+        assert_eq!(
+            rendered["publish_barrier"]["run_id"],
+            serde_json::json!("run-1-publish-0"),
+            "the publish phase must use a distinct barrier run id"
+        );
+        assert_eq!(
+            rendered["publish_barrier"]["ready_count"],
+            serde_json::json!(3)
+        );
+        assert_eq!(
+            rendered["publish_barrier"]["max_ready_skew_ms"],
+            serde_json::json!(9.1)
+        );
+
+        let in_process_publish =
+            Args::parse_from(["mqtt-loadgen", "--sync-connect", "--clients", "2"]);
+        let rendered = sync_connect_json(&in_process_publish, &[], &[], None, &[], &[], None, &[]);
+        assert_eq!(
+            rendered["publish_barrier"]["barrier"],
+            serde_json::json!("in_process")
+        );
+        assert_eq!(
+            rendered["publish_barrier"]["max_ready_skew_ms"],
+            serde_json::json!(0.0)
+        );
+    }
+
+    #[test]
+    fn sync_connect_json_routes_phase_errors_to_their_barrier() {
+        let args = Args::parse_from(["mqtt-loadgen", "--sync-connect", "--clients", "1"]);
+        let errors = vec![
+            "sync_barrier_failed:connect".to_string(),
+            "sync_publish_barrier_failed:publish".to_string(),
+            "connect_failed:connect_timeout".to_string(),
+        ];
+        let rendered = sync_connect_json(&args, &[], &[], None, &[], &[], None, &errors);
+        assert_eq!(
+            rendered["errors"],
+            serde_json::json!(["sync_barrier_failed:connect"])
+        );
+        assert_eq!(
+            rendered["publish_barrier"]["errors"],
+            serde_json::json!(["sync_publish_barrier_failed:publish"]),
+            "publish-phase failures must not be reported as connect-phase failures"
+        );
+    }
+
+    #[test]
+    fn parses_refresh_codes_with_hex_literals() {
+        assert_eq!(
+            parse_token_refresh_codes(Some("135,0x87, 0X04,135")).unwrap(),
+            vec![4, 135]
+        );
+    }
+
+    #[test]
+    fn parses_and_normalizes_qos_distribution() {
+        let distribution = QosDistribution::parse(Some("0:6,1:3,2:1"))
+            .unwrap()
+            .expect("distribution should be present");
+        assert_eq!(distribution.subscribe_qos(), 2);
+        assert_eq!(distribution.as_json()[0]["qos"], 0);
+        assert!((distribution.as_json()[0]["weight"].as_f64().unwrap() - 0.6).abs() < 1e-12);
+        let selected = (0..10).map(|_| distribution.choose()).collect::<Vec<_>>();
+        assert_eq!(selected.iter().filter(|qos| **qos == 0).count(), 6);
+        assert_eq!(selected.iter().filter(|qos| **qos == 1).count(), 3);
+        assert_eq!(selected.iter().filter(|qos| **qos == 2).count(), 1);
+    }
+
+    #[test]
+    fn control_payload_and_response_use_per_command_correlation() {
+        let payload = correlated_control_payload(
+            br#"{"commands":[{"command":"listClients"},{"command":"listRoles"}]}"#,
+            "worker-1",
+        )
+        .expect("payload should correlate");
+        let value: Value = serde_json::from_slice(&payload).expect("payload should remain JSON");
+        assert!(
+            value["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|command| command["correlationData"] == "worker-1")
+        );
+
+        assert!(validate_control_response(
+            br#"{"responses":[{"command":"listClients","correlationData":"worker-1","data":{}},{"command":"listRoles","correlationData":"worker-1","data":{}}]}"#,
+            "worker-1",
+            2,
+        )
+        .expect("response should validate"));
+        assert!(
+            validate_control_response(
+                br#"{"responses":[{"command":"listClients","correlationData":"other","data":{}}]}"#,
+                "worker-1",
+                1,
+            )
+            .is_ok_and(|matched| !matched)
+        );
+        assert!(validate_control_response(
+            br#"{"responses":[{"command":"listClients","correlationData":"worker-1","error":"denied"}]}"#,
+            "worker-1",
+            1,
+        )
+        .is_err());
+        assert!(validate_control_response(
+            br#"{"responses":[{"command":"listClients","correlationData":"other"},{"command":"listRoles","correlationData":"worker-1"}]}"#,
+            "worker-1",
+            1,
+        )
+        .expect("unrelated responses should be ignored"));
+        assert!(
+            validate_control_response(
+                br#"{"responses":[{"command":"listClients","correlationData":"worker-1"}]}"#,
+                "worker-1",
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_control_response(br#"{"error":"endpoint not available"}"#, "worker-1", 1,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fanout_control_exchange_preserves_response_before_publish_completion() {
+        let mut state = FanoutControlExchangeState::default();
+        state
+            .observe_response(
+                br#"{"responses":[{"command":"disableClient","correlationData":"fanout-1"}]}"#,
+                "fanout-1",
+                1,
+            )
+            .expect("response should validate");
+
+        assert!(state.response_complete);
+        assert!(!state.is_complete());
+
+        state.publish_complete = true;
+        assert!(state.is_complete());
+    }
+
+    #[test]
+    fn all_fanout_publishers_prepare_dynamic_security_control_responses() {
+        for role in ["combined", "publisher"] {
+            let args = Args::parse_from([
+                "mqtt-loadgen",
+                "--mode",
+                "fanout",
+                "--fanout-role",
+                role,
+                "--fanout-churn-kind",
+                "dynamic_security_control",
+            ]);
+            assert_eq!(
+                fanout_control_response_topic(&args),
+                Some("$CONTROL/dynamic-security/v1/response")
+            );
+        }
+
+        let unrelated = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--fanout-role",
+            "publisher",
+        ]);
+        assert_eq!(fanout_control_response_topic(&unrelated), None);
+    }
+
+    #[test]
+    fn rejects_invalid_qos_distribution_values() {
+        assert!(QosDistribution::parse(Some("3:1")).is_err());
+        assert!(QosDistribution::parse(Some("1:0")).is_err());
+    }
+
+    #[test]
+    fn expands_biscuit_transform_templates_per_client() {
+        assert_eq!(
+            expand_client_template("sensors/{client_id}/temp", "client_7"),
+            "sensors/client_7/temp"
+        );
+        assert_eq!(
+            expand_client_templates(
+                &[
+                    "publish:sensors/{client_id}/temp".to_string(),
+                    r#"resource("sensors/{client_id}/temp")"#.to_string(),
+                ],
+                "client_7",
+            ),
+            vec![
+                "publish:sensors/client_7/temp",
+                r#"resource("sensors/client_7/temp")"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn expands_client_placeholders_recursively_in_control_payloads() {
+        let payload = br#"{
+            "commands": [{
+                "command": "createRole",
+                "rolename": "dynamic_role_{client_id}",
+                "acls": [
+                    {"topic": "test/{client_id}/#"},
+                    {"topic": "metrics/{region}/#"}
+                ]
+            }],
+            "metadata": [
+                "{client_id}",
+                {"owner": "{client_id}", "literal": "{}", "scoped": "metrics/{region}/#"}
+            ]
+        }"#;
+
+        let expanded = expand_control_payload(payload, "client_7");
+        let expanded: Value =
+            serde_json::from_slice(&expanded).expect("expanded payload should remain JSON");
+
+        assert_eq!(expanded["commands"][0]["rolename"], "dynamic_role_client_7");
+        assert_eq!(
+            expanded["commands"][0]["acls"][0]["topic"],
+            "test/client_7/#"
+        );
+        assert_eq!(
+            expanded["commands"][0]["acls"][1]["topic"],
+            "metrics/{region}/#"
+        );
+        assert_eq!(expanded["metadata"][0], "client_7");
+        assert_eq!(expanded["metadata"][1]["owner"], "client_7");
+        assert_eq!(expanded["metadata"][1]["literal"], "{}");
+        assert_eq!(expanded["metadata"][1]["scoped"], "metrics/{region}/#");
+    }
+
+    #[tokio::test]
+    async fn sync_connect_gate_blocks_until_released() {
+        let gate = Arc::new(SyncConnectGate::new());
+        let worker_gate = Arc::clone(&gate);
+        let mut worker = tokio::spawn(async move {
+            worker_gate.wait().await;
+        });
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), &mut worker)
+                .await
+                .is_err()
+        );
+        gate.release();
+        worker.await.expect("worker should finish after release");
+    }
+
+    #[tokio::test]
+    async fn publish_start_gate_waits_for_ready_and_unavailable_workers() {
+        let gate = Arc::new(PublishStartGate::new(2));
+        gate.mark_ready();
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                gate.wait_until_ready_or_unavailable(Duration::from_secs(5))
+            )
+            .await
+            .is_err(),
+            "gate must keep waiting while a local client has neither connected nor failed"
+        );
+
+        gate.mark_unavailable();
+        assert!(
+            gate.wait_until_ready_or_unavailable(Duration::from_secs(5))
+                .await,
+            "gate should account for local clients that cannot connect"
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_start_gate_times_out_when_a_local_client_never_connects() {
+        let gate = PublishStartGate::new(2);
+        gate.mark_ready();
+        assert!(
+            !gate
+                .wait_until_ready_or_unavailable(Duration::from_millis(10))
+                .await,
+            "a stalled local client must surface a bounded timeout, not deadlock the run"
+        );
+    }
+
+    #[test]
+    fn handoff_tokens_skip_worker_biscuit_transforms() {
+        assert!(!should_apply_worker_biscuit_transforms(None, true, true));
+        assert!(!should_apply_worker_biscuit_transforms(
+            Some("nonce"),
+            false,
+            true
+        ));
+        assert!(!should_apply_worker_biscuit_transforms(None, false, true));
+        assert!(should_apply_worker_biscuit_transforms(None, false, false));
+    }
+
+    #[test]
+    fn split_handoff_receive_timeout_uses_configured_timeout() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "1",
+            "--biscuit-delegate",
+            "--biscuit-delegate-handoff",
+            "--biscuit-delegate-handoff-role",
+            "delegatee",
+            "--biscuit-delegate-handoff-nonce",
+            "run-1",
+            "--biscuit-delegate-handoff-ready-dir",
+            "/tmp/handoff-ready",
+            "--biscuit-delegate-handoff-ready-timeout-seconds",
+            "37",
+        ]);
+
+        assert_eq!(args.biscuit_delegate_handoff_ready_timeout_seconds, 37);
+        assert!(validate_startup_provisioning(&args).is_ok());
+    }
+
+    #[test]
+    fn publish_timeout_defaults_to_ten_seconds_and_is_configurable() {
+        let default_args = Args::parse_from(["mqtt-loadgen"]);
+        assert_eq!(default_args.publish_timeout_seconds, 10);
+        assert_eq!(publish_timeout(&default_args), Duration::from_secs(10));
+        assert_eq!(default_args.connect_timeout_seconds, 10);
+        assert_eq!(connect_timeout(&default_args), Duration::from_secs(10));
+
+        let tuned_args = Args::parse_from(["mqtt-loadgen", "--publish-timeout-seconds", "20"]);
+        assert_eq!(tuned_args.publish_timeout_seconds, 20);
+        assert_eq!(publish_timeout(&tuned_args), Duration::from_secs(20));
+
+        let zero_args = Args::parse_from(["mqtt-loadgen", "--publish-timeout-seconds", "0"]);
+        assert_eq!(publish_timeout(&zero_args), Duration::from_secs(1));
+
+        let conn_args = Args::parse_from(["mqtt-loadgen", "--connect-timeout-seconds", "25"]);
+        assert_eq!(connect_timeout(&conn_args), Duration::from_secs(25));
+    }
+
+    #[tokio::test]
+    async fn handoff_readiness_requires_current_nonce_and_client_id() {
+        let mut ready_dir = std::env::temp_dir();
+        ready_dir.push(format!("mqtt-loadgen-handoff-ready-{}", fill_nonce()));
+        fs::create_dir_all(&ready_dir).expect("ready dir should be created");
+        let client_ids = vec!["client_1".to_string()];
+
+        write_handoff_ready(&ready_dir, "client_1", "old-run")
+            .expect("stale ready file should be written");
+        assert!(
+            !wait_for_handoff_ready_files(
+                &ready_dir,
+                &client_ids,
+                "new-run",
+                Duration::from_millis(1),
+            )
+            .await
+        );
+
+        fs::write(
+            handoff_ready_path(&ready_dir, "client_1"),
+            br#"{"client_id":"client_2","nonce":"new-run","ready":true}"#,
+        )
+        .expect("wrong-client ready file should be written");
+        assert!(
+            !wait_for_handoff_ready_files(
+                &ready_dir,
+                &client_ids,
+                "new-run",
+                Duration::from_millis(1),
+            )
+            .await
+        );
+
+        write_handoff_ready(&ready_dir, "client_1", "new-run")
+            .expect("current ready file should be written");
+        assert!(
+            wait_for_handoff_ready_files(
+                &ready_dir,
+                &client_ids,
+                "new-run",
+                Duration::from_millis(1),
+            )
+            .await
+        );
+
+        let _ = fs::remove_dir_all(ready_dir);
+    }
+
+    #[tokio::test]
+    async fn handoff_release_requires_current_nonce() {
+        let mut ready_dir = std::env::temp_dir();
+        ready_dir.push(format!("mqtt-loadgen-handoff-release-{}", fill_nonce()));
+        fs::create_dir_all(&ready_dir).expect("ready dir should be created");
+        fs::write(
+            handoff_release_path(&ready_dir),
+            br#"{"nonce":"old-run","release":true}"#,
+        )
+        .expect("stale release file should be written");
+        assert!(
+            !wait_for_handoff_release_file(&ready_dir, "new-run", Duration::from_millis(1)).await
+        );
+
+        write_handoff_release(&ready_dir, "new-run")
+            .expect("current release file should be written");
+        assert!(
+            wait_for_handoff_release_file(&ready_dir, "new-run", Duration::from_millis(1)).await
+        );
+
+        let _ = fs::remove_dir_all(ready_dir);
+    }
+
+    #[test]
+    fn publish_output_includes_semantic_contract_metrics() {
+        let args = Args::parse_from(["mqtt-loadgen", "--clients", "1", "--messages", "1"]);
+        let keys = output_keys_for(&args, "publish");
+        assert_eq!(
+            keys,
+            vec![
+                "attenuation",
+                "attenuation_len",
+                "authorization_probes",
+                "connect",
+                "control",
+                "control_effect",
+                "control_injection_delay",
+                "control_response",
+                "control_responses",
+                "credential_issuance",
+                "delegation",
+                "delegation_handoff_publish",
+                "delegation_len",
+                "errors",
+                "expiry_denial_count",
+                "fanout_churn",
+                "inputs",
+                "proactive_refresh",
+                "proactive_refresh_attempts",
+                "proactive_refresh_failures",
+                "proactive_refresh_len",
+                "proactive_refresh_successes",
+                "publish",
+                "publish_outcomes",
+                "publish_qos_0",
+                "publish_qos_1",
+                "publish_qos_2",
+                "publish_throughput_mps",
+                "qos_distribution_actual",
+                "raw_metrics",
+                "raw_publish_ms",
+                "reauth_storm",
+                "receive",
+                "receive_throughput_mps",
+                "received_messages",
+                "session_continuity_ok",
+                "sync_connect",
+                "throughput_mps",
+                "token_refresh",
+                "token_refresh_len",
+            ]
+        );
+    }
+
+    #[test]
+    fn fanout_publish_outcomes_include_failed_attempts_by_qos() {
+        let mut outcomes = FanoutPublishOutcomes::default();
+        outcomes.record_attempt(0);
+        outcomes.record_attempt(1);
+        outcomes.record_failure(1);
+        outcomes.record_attempt(2);
+
+        assert_eq!(
+            outcomes.to_json(2),
+            serde_json::json!({
+                "attempted": 3,
+                "succeeded": 2,
+                "failed": 1,
+                "attempted_by_qos": {"qos_0": 1, "qos_1": 1, "qos_2": 1},
+                "failed_by_qos": {"qos_0": 0, "qos_1": 1, "qos_2": 0},
+            })
+        );
+    }
+
+    #[test]
+    fn control_and_fanout_inputs_include_legacy_metadata() {
+        let control_args = Args::parse_from([
+            "mqtt-loadgen",
+            "--control-mode",
+            "--control-topic",
+            "$CONTROL/dynamic-security/v1",
+            "--token-refresh-codes",
+            "0x87",
+        ]);
+        let control_inputs = inputs_json(&control_args, "publish", None, &[135], None);
+        assert_eq!(control_inputs["control"]["mode"], true);
+        assert_eq!(control_inputs["biscuit_transform_mode"], "in_process");
+        assert_eq!(control_inputs["proactive_refresh"], false);
+        assert_eq!(
+            control_inputs["token_refresh_codes"],
+            serde_json::json!([135])
+        );
+
+        let fanout_args = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--qos-distribution",
+            "0:0.5,1:0.5",
+        ]);
+        let distribution = QosDistribution::parse(fanout_args.qos_distribution.as_deref())
+            .unwrap()
+            .unwrap();
+        let fanout_inputs = inputs_json(&fanout_args, "fanout", Some(&distribution), &[], None);
+        assert_eq!(fanout_inputs["mode"], "fanout");
+        assert_eq!(fanout_inputs["qos_distribution"][0]["qos"], 0);
+        assert_eq!(
+            fanout_inputs["fanout_latency_clock"],
+            serde_json::json!({
+                "source": "clock_monotonic_raw",
+                "payload_version": "v3",
+            })
+        );
+        assert!(control_inputs["fanout_latency_clock"].is_null());
+    }
+
+    #[test]
+    fn credential_attestations_follow_the_actual_fanout_role() {
+        let combined = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--clients",
+            "3",
+            "--password-map-profile",
+            "subscriber-profile",
+            "--fanout-publisher-password-map-profile",
+            "publisher-profile",
+        ]);
+        let combined_inputs = inputs_json(&combined, "fanout", None, &[], None);
+        assert_eq!(
+            combined_inputs["credential_attestations"]["clients"]["profile"],
+            "subscriber-profile"
+        );
+        assert_eq!(
+            combined_inputs["credential_attestations"]["clients"]["validated_credentials"],
+            3
+        );
+        assert_eq!(
+            combined_inputs["credential_attestations"]["fanout_publisher"]["profile"],
+            "publisher-profile"
+        );
+        assert_eq!(
+            combined_inputs["credential_attestations"]["fanout_publisher"]["validated_credentials"],
+            1
+        );
+
+        let mut subscriber = combined.clone();
+        subscriber.fanout_role = "subscriber".to_string();
+        subscriber.clients = 1;
+        let subscriber_inputs = inputs_json(&subscriber, "fanout", None, &[], None);
+        assert_eq!(
+            subscriber_inputs["credential_attestations"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["clients"]
+        );
+
+        let mut publisher = combined;
+        publisher.fanout_role = "publisher".to_string();
+        let publisher_inputs = inputs_json(&publisher, "fanout", None, &[], None);
+        assert_eq!(
+            publisher_inputs["credential_attestations"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["fanout_publisher"]
+        );
+
+        let mut delegatee = publisher;
+        delegatee.mode = "publish".to_string();
+        delegatee.biscuit_delegate_handoff_role = "delegatee".to_string();
+        let delegatee_inputs = inputs_json(&delegatee, "publish", None, &[], None);
+        assert!(
+            delegatee_inputs["credential_attestations"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn biscuit_transform_rejects_custom_helper_binary() {
+        let err =
+            reject_custom_biscuit_transform_bin(Some("biscuit-attenuate"), "Biscuit transform")
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("custom helper binaries are no longer supported"));
+        assert!(err.contains("in-process"));
+    }
+
+    #[test]
+    fn control_mode_applies_legacy_default_topic() {
+        let mut args = Args::parse_from(["mqtt-loadgen", "--control-mode"]);
+        assert_eq!(args.control_topic, None);
+
+        apply_legacy_defaults(&mut args);
+
+        assert_eq!(args.control_topic.as_deref(), Some(DEFAULT_CONTROL_TOPIC));
+        let inputs = inputs_json(&args, "publish", None, &[], None);
+        assert_eq!(inputs["control"]["topic"], DEFAULT_CONTROL_TOPIC);
+    }
+
+    #[test]
+    fn explicit_control_topic_overrides_legacy_default() {
+        let mut args = Args::parse_from([
+            "mqtt-loadgen",
+            "--control-mode",
+            "--control-topic",
+            "custom/control/{client_id}",
+        ]);
+
+        apply_legacy_defaults(&mut args);
+
+        assert_eq!(
+            args.control_topic.as_deref(),
+            Some("custom/control/{client_id}")
+        );
+    }
+
+    #[test]
+    fn proactive_refresh_deadline_uses_exp_minus_margin() {
+        assert_eq!(
+            proactive_refresh_delay(Some(1_000), 60, 939),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            proactive_refresh_delay(Some(1_000), 60, 940),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            proactive_refresh_delay(Some(1_060), 60, 1_000),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            proactive_refresh_delay(Some(1_000), 60, 1_000),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(proactive_refresh_delay(None, 60, 940), None);
+    }
+
+    #[test]
+    fn proactive_refresh_assertion_requires_successful_continuity() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--proactive-refresh",
+            "--proactive-refresh-assert-continuity",
+        ]);
+
+        let no_refresh = standard_output(&args, None, &[], None, empty_standard_metrics());
+        assert!(
+            validate_proactive_refresh_assertion(&args, &no_refresh)
+                .unwrap_err()
+                .to_string()
+                .contains("no proactive refresh ran")
+        );
+
+        let mut failed_metrics = empty_standard_metrics();
+        failed_metrics.proactive_refresh_attempts = 1;
+        failed_metrics.proactive_refresh_failures = 1;
+        let failed_continuity = standard_output(&args, None, &[], None, failed_metrics);
+        assert!(
+            validate_proactive_refresh_assertion(&args, &failed_continuity)
+                .unwrap_err()
+                .to_string()
+                .contains("session continuity was not maintained")
+        );
+
+        let mut successful_metrics = empty_standard_metrics();
+        successful_metrics.proactive_refresh_attempts = 1;
+        successful_metrics.proactive_refresh_successes = 1;
+        let successful = standard_output(&args, None, &[], None, successful_metrics);
+        validate_proactive_refresh_assertion(&args, &successful)
+            .expect("successful proactive refresh should satisfy continuity assertion");
+    }
+
+    #[test]
+    fn reauth_storm_output_reports_attempt_skew_and_counts() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--proactive-refresh",
+            "--reauth-storm",
+        ]);
+        let mut metrics = empty_standard_metrics();
+        metrics.proactive_refresh_attempts = 2;
+        metrics.proactive_refresh_successes = 2;
+        metrics.proactive_refresh_attempt_unix_ms = vec![1_000, 1_018];
+
+        let output = standard_output(&args, None, &[], None, metrics);
+
+        assert_eq!(output.reauth_storm["enabled"], true);
+        assert_eq!(output.reauth_storm["clients"], 2);
+        assert_eq!(output.reauth_storm["attempts"], 2);
+        assert_eq!(output.reauth_storm["successes"], 2);
+        assert_eq!(output.reauth_storm["failures"], 0);
+        assert_eq!(output.reauth_storm["max_refresh_skew_ms"], 18.0);
+        assert_eq!(output.reauth_storm["session_continuity_ok"], true);
+    }
+
+    #[test]
+    fn reauth_storm_requires_multi_client_proactive_refresh() {
+        let no_refresh = Args::parse_from(["mqtt-loadgen", "--clients", "2", "--reauth-storm"]);
+        assert!(
+            validate_startup_provisioning(&no_refresh)
+                .unwrap_err()
+                .to_string()
+                .contains("requires --proactive-refresh")
+        );
+
+        let single_client = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "1",
+            "--proactive-refresh",
+            "--token-issuer-url",
+            "http://issuer",
+            "--reauth-storm",
+        ]);
+        assert!(
+            validate_startup_provisioning(&single_client)
+                .unwrap_err()
+                .to_string()
+                .contains("more than one client")
+        );
+    }
+
+    #[test]
+    fn expiry_denial_classification_ignores_reauth_transport_errors() {
+        assert!(expiry_denial_error("AuthenticationFailed: expired"));
+        assert!(expiry_denial_error("authentication failed: token expired"));
+        assert!(expiry_denial_error("NotAuthorized"));
+        assert!(!expiry_denial_error("reauth_timeout"));
+        assert!(!expiry_denial_error("reauth_send: channel closed"));
+    }
+
+    #[test]
+    fn transformed_biscuit_expiry_uses_shortest_transform_ttl() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--biscuit-attenuate",
+            "--biscuit-attenuate-ttl",
+            "30",
+            "--biscuit-delegate",
+            "--biscuit-delegate-ttl",
+            "45",
+        ]);
+        let now = unix_timestamp_now().expect("system time should be available");
+        let exp = transformed_biscuit_expiry(&args, Some(now + 300))
+            .expect("expiry should calculate")
+            .expect("transformed expiry should exist");
+
+        assert!(exp >= now + 29);
+        assert!(exp <= now + 31);
+    }
+
+    #[test]
+    fn refresh_token_expiry_updates_initial_transformed_token_expiry() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--biscuit-attenuate",
+            "--biscuit-attenuate-ttl",
+            "30",
+        ]);
+        let now = unix_timestamp_now().expect("system time should be available");
+        let mut token = IssuedToken {
+            bytes: b"token".to_vec(),
+            exp: Some(now + 300),
+            issuance: None,
+        };
+
+        refresh_token_expiry(&args, &mut token, true).expect("expiry should update");
+        let exp = token.exp.expect("transformed token should retain expiry");
+
+        assert!(exp >= now + 29);
+        assert!(exp <= now + 31);
+    }
+
+    #[test]
+    fn transformed_biscuit_expiry_ignores_ttl_for_disabled_transforms() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--biscuit-attenuate-ttl",
+            "30",
+            "--biscuit-delegate-ttl",
+            "45",
+        ]);
+        let now = unix_timestamp_now().expect("system time should be available");
+
+        assert_eq!(
+            transformed_biscuit_expiry(&args, Some(now + 300)).expect("expiry should calculate"),
+            Some(now + 300)
+        );
+    }
+
+    #[test]
+    fn proactive_startup_validation_requires_issuer_and_kind() {
+        let missing_url = Args::parse_from(["mqtt-loadgen", "--proactive-refresh"]);
+        assert!(validate_startup_provisioning(&missing_url).is_err());
+
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--proactive-refresh",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "jwt",
+        ]);
+        assert!(validate_startup_provisioning(&valid).is_ok());
+        let inputs = inputs_json(&valid, "publish", None, &[], None);
+        assert_eq!(inputs["proactive_refresh"], true);
+        assert_eq!(inputs["proactive_refresh_margin_seconds"], 60);
+
+        let invalid_ttl = Args::parse_from([
+            "mqtt-loadgen",
+            "--proactive-refresh",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "jwt",
+            "--token-issuer-ttl",
+            "60",
+            "--proactive-refresh-margin-seconds",
+            "60",
+        ]);
+        assert!(validate_startup_provisioning(&invalid_ttl).is_err());
+
+        let invalid_transform_ttl = Args::parse_from([
+            "mqtt-loadgen",
+            "--proactive-refresh",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "biscuit",
+            "--biscuit-attenuate",
+            "--biscuit-attenuate-ttl",
+            "60",
+            "--proactive-refresh-margin-seconds",
+            "60",
+        ]);
+        assert!(validate_startup_provisioning(&invalid_transform_ttl).is_err());
+
+        let fanout = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--proactive-refresh",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "jwt",
+        ]);
+        let err = validate_startup_provisioning(&fanout)
+            .expect_err("fanout proactive refresh should be rejected");
+        assert!(err.to_string().contains("fanout mode"));
+    }
+
+    #[test]
+    fn proactive_worker_connect_uses_enhanced_auth_data() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--proactive-refresh",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "jwt",
+        ]);
+        let spec = worker_specs(&args, "client_1", b"fresh-token".to_vec());
+
+        assert_eq!(spec.username, "");
+        assert!(spec.password.is_empty());
+        assert_eq!(spec.auth_method.as_deref(), Some("token"));
+        assert_eq!(spec.auth_data.as_deref(), Some(&b"fresh-token"[..]));
+    }
+
+    #[test]
+    fn rust_cli_preserves_python_wrapper_env_vars() {
+        assert_eq!(env_for("host").as_deref(), Some("MQTT_HOST"));
+        assert_eq!(env_for("username").as_deref(), Some("MQTT_USERNAME"));
+        assert_eq!(env_for("password").as_deref(), Some("MQTT_PASSWORD"));
+        assert_eq!(
+            env_for("token_issuer_url").as_deref(),
+            Some("TOKEN_ISSUER_URL")
+        );
+        assert_eq!(
+            env_for("control_payload_file").as_deref(),
+            Some("MQTT_CONTROL_PAYLOAD_FILE")
+        );
+        assert_eq!(
+            env_for("fanout_churn_sqlite_subscribers").as_deref(),
+            Some("MQTT_FANOUT_CHURN_SQLITE_SUBSCRIBERS")
+        );
+    }
+
+    #[test]
+    fn strict_startup_validation_matches_legacy_rules() {
+        let missing_url = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--jwt-identity-binding",
+            "strict",
+        ]);
+        assert!(validate_startup_provisioning(&missing_url).is_err());
+
+        let valid = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--jwt-identity-binding",
+            "strict",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "jwt",
+        ]);
+        assert!(validate_startup_provisioning(&valid).is_ok());
+    }
+
+    #[test]
+    fn strict_fanout_publisher_uses_dedicated_startup_provisioning() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--clients",
+            "2",
+            "--jwt-identity-binding",
+            "strict",
+            "--token-issuer-url",
+            "http://issuer",
+            "--token-issuer-kind",
+            "jwt",
+        ]);
+        assert!(should_provision_fanout_publisher(&args, "jwt").unwrap());
+
+        let non_strict = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--clients",
+            "2",
+            "--jwt-identity-binding",
+            "off",
+        ]);
+        assert!(!should_provision_fanout_publisher(&non_strict, "jwt").unwrap());
+    }
+
+    #[test]
+    fn password_map_profiles_preserve_token_and_expiry() {
+        let path = std::env::temp_dir().join(format!(
+            "mqtt-password-map-{}-{}.json",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        fs::write(
+            &path,
+            r#"{"version":2,"max_clients":2,"profile_semantics":{"jwt":{"token_kind":"jwt"}},"profiles":{"jwt":{"kind":"jwt","entries":{"client_1":{"token":"token-1","exp":2000000000},"fanout_publisher":{"token":"publisher","exp":2000000000}}}}}"#,
+        )
+        .unwrap();
+
+        let map = load_password_map(&path, None).unwrap();
+        fs::remove_file(path).unwrap();
+        let client = &map.profiles["jwt"]["client_1"];
+        assert_eq!(client.bytes, b"token-1");
+        assert_eq!(client.exp, Some(2_000_000_000));
+        assert_eq!(map.profiles["jwt"]["fanout_publisher"].bytes, b"publisher");
+        assert_eq!(map.profile_semantics["jwt"]["token_kind"], "jwt");
+    }
+
+    #[test]
+    fn password_map_v1_requires_regeneration() {
+        let path = std::env::temp_dir().join(format!(
+            "mqtt-password-map-v1-{}-{}.json",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        fs::write(&path, r#"{"version":1,"max_clients":1,"profiles":{}}"#).unwrap();
+
+        let error = load_password_map(&path, None).unwrap_err();
+        fs::remove_file(path).unwrap();
+        assert!(error.to_string().contains("regenerate tokens"));
+    }
+
+    #[test]
+    fn password_map_loads_only_selected_profiles() {
+        let path = std::env::temp_dir().join(format!(
+            "mqtt-password-map-selected-{}-{}.json",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        fs::write(
+            &path,
+            r#"{"version":2,"max_clients":2,"profile_semantics":{},"profiles":{"jwt":{"kind":"jwt","entries":{"client_1":{"token":"token-1","exp":2000000000}}},"biscuit":{"kind":"biscuit","entries":{"fanout_publisher":{"token":"publisher","exp":2000000001}}},"unused":{"kind":"unsupported","entries":{"client_1":{"token":"not-a-token"}}}}}"#,
+        )
+        .unwrap();
+
+        let selected = HashSet::from(["jwt".to_string(), "biscuit".to_string()]);
+        let map = load_password_map(&path, Some(&selected)).unwrap();
+        fs::remove_file(path).unwrap();
+
+        assert_eq!(map.profiles.len(), 2);
+        assert_eq!(map.profiles["jwt"]["client_1"].bytes, b"token-1");
+        assert_eq!(
+            map.profiles["biscuit"]["fanout_publisher"].exp,
+            Some(2_000_000_001)
+        );
+        assert!(!map.profiles.contains_key("unused"));
+    }
+
+    #[test]
+    fn password_map_rejects_invalid_selected_profile() {
+        let path = std::env::temp_dir().join(format!(
+            "mqtt-password-map-invalid-{}-{}.json",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        fs::write(
+            &path,
+            r#"{"version":2,"max_clients":1,"profile_semantics":{},"profiles":{"invalid":{"kind":"unsupported","entries":{}}}}"#,
+        )
+        .unwrap();
+
+        let selected = HashSet::from(["invalid".to_string()]);
+        let error = load_password_map(&path, Some(&selected)).unwrap_err();
+        fs::remove_file(path).unwrap();
+
+        assert!(error.to_string().contains("unsupported kind"));
+    }
+
+    #[test]
+    fn parse_fanout_message_matches_publisher_format() {
+        let payload = b"v3|1250000000|7|2|";
+        let message = parse_fanout_message(payload).unwrap();
+        assert_eq!(message.sent_monotonic_ns, 1_250_000_000);
+        assert_eq!(message.sequence_id, Some(7));
+        assert_eq!(message.phase, Some(2));
+    }
+
+    #[test]
+    fn parse_fanout_message_accepts_size_padding() {
+        let mut payload = b"v3|500000000|3|".to_vec();
+        payload.extend(vec![b'A'; 64]);
+        let message = parse_fanout_message(&payload).unwrap();
+        assert_eq!(message.sent_monotonic_ns, 500_000_000);
+        assert_eq!(message.sequence_id, Some(3));
+    }
+
+    #[test]
+    fn parse_fanout_message_rejects_json_notification() {
+        assert!(
+            parse_fanout_message(br#"{"event":"acl_read_policy_changed","client_id":"client_1"}"#)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn parse_fanout_message_rejects_unparseable_prefix() {
+        assert!(parse_fanout_message(b"v3|not-a-number|5|").is_none());
+    }
+
+    #[test]
+    fn parse_fanout_message_accepts_missing_sequence_id() {
+        let message = parse_fanout_message(b"v3|500000000|").unwrap();
+        assert_eq!(message.sent_monotonic_ns, 500_000_000);
+        assert_eq!(message.sequence_id, None);
+    }
+
+    #[test]
+    fn parse_fanout_message_rejects_wall_clock_payload_version() {
+        assert!(parse_fanout_message(b"v2|500000000|3|0|").is_none());
+    }
+
+    #[test]
+    fn fanout_receive_latency_rejects_invalid_clock_deltas() {
+        assert_eq!(
+            fanout_receive_latency_ms(1_000_000, 2_500_000, Duration::from_secs(1)).unwrap(),
+            1.5
+        );
+        assert!(
+            fanout_receive_latency_ms(2, 1, Duration::from_secs(1))
+                .unwrap_err()
+                .to_string()
+                .contains("fanout_receive_negative_clock_delta")
+        );
+        assert!(
+            fanout_receive_latency_ms(0, 2_000_000_000, Duration::from_secs(1))
+                .unwrap_err()
+                .to_string()
+                .contains("fanout_receive_implausible_clock_delta")
+        );
+    }
+
+    #[test]
+    fn monotonic_raw_clock_does_not_move_backwards() {
+        let first = monotonic_raw_nanos_now().unwrap();
+        let second = monotonic_raw_nanos_now().unwrap();
+        assert!(second >= first);
+    }
+
+    #[test]
+    fn subscriber_churn_output_uses_publisher_applied_phase_count() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--mode",
+            "fanout",
+            "--clients",
+            "1",
+            "--messages",
+            "5",
+            "--fanout-churn-kind",
+            "sqlite_toggle_read",
+            "--fanout-churn-after-messages",
+            "4",
+            "--fanout-churn-interval-messages",
+            "4",
+            "--fanout-churn-max-events",
+            "4",
+        ]);
+        let churn = fanout_churn_json(
+            &args,
+            "fanout",
+            Some(&FanoutChurnState::default()),
+            Some(&[4, 0]),
+            Some(1),
+        );
+        let phases = churn["phases"].as_array().unwrap();
+        assert_eq!(phases.len(), 2);
+        assert_eq!(phases[1]["received_deliveries"], 0);
+    }
+
+    #[test]
+    fn fanout_churn_receipts_follow_delivery_phase_contract() {
+        let args = Args::parse_from([
+            "mqtt-loadgen",
+            "--clients",
+            "2",
+            "--fanout-churn-kind",
+            "sqlite_toggle_private_deny",
+            "--fanout-churn-after-messages",
+            "4",
+            "--fanout-churn-interval-messages",
+            "4",
+            "--fanout-churn-max-events",
+            "4",
+            "--fanout-churn-phase-delivery",
+            "all,none,all,none,all",
+        ]);
+
+        assert_eq!(expected_fanout_churn_receipts(&args, 4), Some(8));
+        assert_eq!(expected_fanout_churn_receipts(&args, 8), Some(8));
+        assert_eq!(expected_fanout_churn_receipts(&args, 12), Some(16));
+        assert_eq!(expected_fanout_churn_receipts(&args, 16), Some(16));
+    }
+
+    #[test]
+    fn eventloop_requests_done_maps_to_clean_terminal_teardown() {
+        assert!(is_eventloop_requests_done(
+            &rumqttc::ConnectionError::RequestsDone
+        ));
+        assert_eq!(
+            classify_eventloop_poll_error(rumqttc::ConnectionError::RequestsDone),
+            None
+        );
+    }
+
+    #[test]
+    fn eventloop_other_connection_errors_remain_failures() {
+        let cases = [
+            rumqttc::ConnectionError::DisconnectTimeout,
+            rumqttc::ConnectionError::BrokerTransportMismatch,
+            rumqttc::ConnectionError::AuthProcessingError,
+            rumqttc::ConnectionError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "reset",
+            )),
+        ];
+        for err in cases {
+            assert!(!is_eventloop_requests_done(&err));
+            let classified = classify_eventloop_poll_error(err);
+            let message = classified.expect("non-RequestsDone must classify as failure");
+            assert!(
+                message.starts_with("eventloop_failed:"),
+                "unexpected classification: {message}"
+            );
+        }
+        let timeout_message =
+            classify_eventloop_poll_error(rumqttc::ConnectionError::DisconnectTimeout)
+                .expect("DisconnectTimeout must classify as failure");
+        assert!(timeout_message.contains("Graceful disconnect timed out"));
+    }
+}

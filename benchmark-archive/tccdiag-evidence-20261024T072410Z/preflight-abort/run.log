@@ -1,0 +1,27 @@
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /home/eagle/TCC2/mqtt-auth-biscuit/benchmarks/run_scenarios.py:8643 in main  │
+│                                                                              │
+│    8640 │   if no_build_images:                                              │
+│    8641 │   │   os.environ[NO_BUILD_IMAGES_ENVVAR] = "1"                     │
+│    8642 │   if _load_image_freeze_manifest() is not None:                    │
+│ ❱  8643 │   │   frozen = verify_image_freeze()                               │
+│    8644 │   │   logger.info(                                                 │
+│    8645 │   │   │   "image freeze verified: source commit %s, %d services",  │
+│    8646 │   │   │   frozen.get("source_commit"),                             │
+│                                                                              │
+│ /home/eagle/TCC2/mqtt-auth-biscuit/benchmarks/run_scenarios.py:604 in        │
+│ verify_image_freeze                                                          │
+│                                                                              │
+│     601 │   │   │   │   "Run scripts/freeze-images (or docker load the       │
+│         campaign archive) first."                                            │
+│     602 │   │   │   )                                                        │
+│     603 │   │   if actual != service["image_id"]:                            │
+│ ❱   604 │   │   │   raise RuntimeError(                                      │
+│     605 │   │   │   │   f"service {service['service']}: image ID {actual} != │
+│         frozen {service['image_id']}"                                        │
+│     606 │   │   │   )                                                        │
+│     607 │   return manifest                                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+RuntimeError: service loadgen: image ID 
+sha256:7b50ea7f50e9557e406d68abc91f867e52d1ec5fda237e3e8d1c8828f190bab4 != 
+frozen sha256:23f49664c8550d20a6585b0693772ebe265d457c234d8fa17a71640b36a87167

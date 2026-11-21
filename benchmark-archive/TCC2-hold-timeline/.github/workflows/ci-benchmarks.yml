@@ -1,0 +1,378 @@
+name: CI Benchmark Infrastructure
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'infra/**'
+      - 'mqtt-auth-biscuit/benchmarks/**'
+      - 'mqtt-auth-biscuit/docker/**'
+      - 'mqtt-auth-biscuit/crates/**'
+      - 'mqtt-auth-biscuit/tests/**'
+      - 'mqtt-auth-biscuit/pytest.ini'
+      - '.dockerignore'
+      - '.github/workflows/ci-benchmarks.yml'
+      - 'TODO2.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'requirements.txt'
+      - 'run_python_tests.sh'
+      - 'scripts/**'
+      - 'tools/**'
+      - '**/*.md'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'infra/**'
+      - 'mqtt-auth-biscuit/benchmarks/**'
+      - 'mqtt-auth-biscuit/docker/**'
+      - 'mqtt-auth-biscuit/crates/**'
+      - 'mqtt-auth-biscuit/tests/**'
+      - 'mqtt-auth-biscuit/pytest.ini'
+      - '.dockerignore'
+      - '.github/workflows/ci-benchmarks.yml'
+      - 'TODO2.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'requirements.txt'
+      - 'run_python_tests.sh'
+      - 'scripts/**'
+      - 'tools/**'
+      - '**/*.md'
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  infra-contract:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python 3.14.2
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14.2'
+
+      - name: Install uv 0.9.17
+        run: python -m pip install uv==0.9.17
+
+      - name: Sync Python dependencies
+        run: uv sync --locked
+
+      - name: Install Rust 1.93.1
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.93.1
+
+      - name: Install Terraform 1.13.5
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: 1.13.5
+
+      - name: Test benchmark-host tool crates
+        run: |
+          cargo test --locked \
+            -p repo-benchmark-host-helper \
+            -p repo-benchmark-host-smoke \
+            -p repo-check-pins \
+            -p repo-check-docs \
+            -p repo-render-benchmark-inventory
+
+      - name: Audit documentation
+        run: ./scripts/check-docs
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=infra/terraform fmt -check
+
+      - name: Initialize Terraform provider lockfile
+        run: terraform -chdir=infra/terraform init -backend=false -lockfile=readonly
+
+      - name: Run Terraform label regression tests
+        run: terraform -chdir=infra/terraform test
+
+      - name: Validate Terraform configuration
+        run: terraform -chdir=infra/terraform validate
+
+      - name: Syntax check benchmark-host Ansible playbook
+        working-directory: infra/ansible
+        run: uv run --locked --group dev ansible-playbook -i inventory.example.yml --syntax-check playbook.yml
+
+  test-benchmark-infrastructure:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python 3.14.2
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14.2'
+
+      - name: Install uv 0.9.17
+        run: python -m pip install uv==0.9.17
+
+      - name: Sync Python dependencies
+        run: uv sync --locked
+
+      - name: Run reproducibility audit
+        run: ./scripts/check-pins
+
+      - name: Install Rust 1.93.1
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: 1.93.1
+
+      - name: Build plugin in debug mode
+        working-directory: mqtt-auth-biscuit
+        run: cargo build --locked
+
+      - name: Generate test tokens
+        working-directory: mqtt-auth-biscuit
+        run: cargo run --locked --bin gen-tokens
+
+      - name: Test benchmark script syntax
+        run: |
+          uv run --locked python -m py_compile mqtt-auth-biscuit/benchmarks/debug_queries.py
+          uv run --locked python -m py_compile mqtt-auth-biscuit/benchmarks/test_resource_snapshot.py
+          uv run --locked python -m py_compile mqtt-auth-biscuit/benchmarks/verify_prometheus.py
+          uv run --locked python -m py_compile mqtt-auth-biscuit/benchmarks/run_scenarios.py
+          uv run --locked python -m py_compile mqtt-auth-biscuit/benchmarks/loadgen.py
+
+      - name: Ruff check
+        run: uv run --locked --group dev ruff check .
+
+      - name: Ruff format check
+        run: uv run --locked --group dev ruff format --check .
+
+      - name: Mypy check
+        run: uv run --locked --group dev mypy mqtt-auth-biscuit
+
+      - name: Run benchmark topology tests
+        env:
+          PYTHONPATH: mqtt-auth-biscuit
+        run: |
+          uv run --locked --group dev pytest -q \
+            mqtt-auth-biscuit/benchmarks/test_loadgen_wrapper.py \
+            mqtt-auth-biscuit/benchmarks/test_documentation_contracts.py \
+            mqtt-auth-biscuit/benchmarks/test_runner_startup_readiness.py \
+            mqtt-auth-biscuit/benchmarks/test_scenario_semantics.py
+
+      - name: Verify Docker tooling
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Validate Docker Compose configuration
+        working-directory: mqtt-auth-biscuit/docker
+        run: docker compose -f docker-compose.yml config
+
+      - name: Build and smoke loadgen container
+        working-directory: mqtt-auth-biscuit
+        run: |
+          docker compose -f docker/docker-compose.yml build loadgen
+          docker compose -f docker/docker-compose.yml run --rm --no-deps loadgen --help > /tmp/loadgen-help.txt
+          grep -q -- '--client-index-start' /tmp/loadgen-help.txt
+
+      - name: Validate resource snapshot telemetry
+        env:
+          PYTHONPATH: mqtt-auth-biscuit
+        run: uv run --locked --group dev pytest -q mqtt-auth-biscuit/benchmarks/test_resource_snapshot.py
+
+      - name: Build Docker images (dry run)
+        working-directory: mqtt-auth-biscuit/docker
+        run: docker compose -f docker-compose.yml build --dry-run 2>/dev/null || echo 'Dry-run completed'
+
+      - name: Check token generation output
+        run: |
+          if [ -f mqtt-auth-biscuit/benchmarks/tokens.json ]; then
+            uv run --locked python -c "import json; data=json.load(open('mqtt-auth-biscuit/benchmarks/tokens.json')); print(f'Contains {len(data)} token entries')"
+          else
+            echo 'tokens.json not found'
+            exit 1
+          fi
+
+      - name: Validate token JSON structure
+        run: |
+          uv run --locked python - <<'PY'
+          import json
+          import re
+
+          with open("mqtt-auth-biscuit/benchmarks/tokens.json", encoding="utf-8") as f:
+              data = json.load(f)
+
+          required_tokens = ["jwt", "jwt_short", "biscuit", "biscuit_short", "biscuit_5", "biscuit_25", "biscuit_delegated"]
+          missing = [token for token in required_tokens if token not in data]
+          if missing:
+              print(f"Missing tokens: {missing}")
+              raise SystemExit(1)
+
+          jwt_pattern = r"^eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*$"
+          if not re.match(jwt_pattern, data["jwt"]):
+              print("JWT token format invalid")
+              raise SystemExit(1)
+          print("Token structure valid")
+          PY
+
+  benchmark-flow-tests:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python 3.14.2
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14.2'
+
+      - name: Install uv 0.9.17
+        run: python -m pip install uv==0.9.17
+
+      - name: Sync Python dependencies
+        run: uv sync --locked
+
+      - name: Run benchmark flow tests
+        env:
+          PYTHONPATH: mqtt-auth-biscuit
+        run: |
+          uv run --locked --group dev pytest \
+            mqtt-auth-biscuit/benchmarks/test_loadgen_wrapper.py \
+            mqtt-auth-biscuit/benchmarks/test_acl_read_fanout_churn_coverage.py \
+            mqtt-auth-biscuit/benchmarks/test_acl_read_profile_matrix_coverage.py \
+            mqtt-auth-biscuit/benchmarks/test_static_acl_coverage.py \
+            mqtt-auth-biscuit/benchmarks/test_authz_config_state.py \
+            mqtt-auth-biscuit/benchmarks/test_policy_churn.py \
+            -q
+
+  broker-runtime-fast:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python 3.14.2
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14.2'
+
+      - name: Install uv 0.9.17
+        run: python -m pip install uv==0.9.17
+
+      - name: Sync Python dependencies
+        run: uv sync --locked
+
+      - name: Verify Docker tooling
+        run: |
+          docker --version
+          docker compose version
+
+      # Authenticated pulls raise the Docker Hub rate limit above the shared-IP
+      # anonymous quota. Skipped when secrets are unavailable (e.g. fork PRs);
+      # anonymous fallback can still hit Docker Hub 429 limits.
+      - name: Log in to Docker Hub (authenticated pulls)
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Run broker integration tests (fast suite)
+        env:
+          PYTHONPATH: mqtt-auth-biscuit
+          ISSUE39_ARTIFACT_DIR: ${{ runner.temp }}/issue39-runtime-fast
+        run: |
+          mkdir -p "$ISSUE39_ARTIFACT_DIR"
+          uv run --locked --group dev pytest -m "broker_integration and not ci_heavy" \
+            mqtt-auth-biscuit/tests/integration/test_runtime_enforcement.py \
+            mqtt-auth-biscuit/tests/integration/test_acl_read_profiles_matrix.py \
+            -vv -s \
+            --maxfail=1 \
+            --durations=20 \
+            --junitxml="$ISSUE39_ARTIFACT_DIR/junit-fast.xml"
+
+      - name: Upload broker artifacts (fast suite)
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: issue39-runtime-fast-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue39-runtime-fast
+          if-no-files-found: warn
+
+  broker-runtime-full:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python 3.14.2
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14.2'
+
+      - name: Install uv 0.9.17
+        run: python -m pip install uv==0.9.17
+
+      - name: Sync Python dependencies
+        run: uv sync --locked
+
+      - name: Verify Docker tooling
+        run: |
+          docker --version
+          docker compose version
+
+      # Authenticated pulls raise the Docker Hub rate limit above the shared-IP
+      # anonymous quota. Skipped when secrets are unavailable (e.g. fork PRs);
+      # anonymous fallback can still hit Docker Hub 429 limits.
+      - name: Log in to Docker Hub (authenticated pulls)
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Run broker integration tests (full suite)
+        env:
+          PYTHONPATH: mqtt-auth-biscuit
+          ISSUE39_ARTIFACT_DIR: ${{ runner.temp }}/issue39-runtime-full
+        run: |
+          mkdir -p "$ISSUE39_ARTIFACT_DIR"
+          uv run --locked --group dev pytest -m broker_integration \
+            mqtt-auth-biscuit/tests/integration/test_runtime_enforcement.py \
+            mqtt-auth-biscuit/tests/integration/test_acl_read_profiles_matrix.py \
+            -vv -s \
+            --durations=30 \
+            --junitxml="$ISSUE39_ARTIFACT_DIR/junit-full.xml"
+
+      - name: Upload broker artifacts (full suite)
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: issue39-runtime-full-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/issue39-runtime-full
+          if-no-files-found: warn

@@ -1,0 +1,7 @@
+b3d4352bd5ef6f76969821230a09b15be9ecf901e0d0665bbcd5b85994e2696d  mqtt-auth-biscuit/target/release/mqtt-loadgen
+b8b05cfa914844588bde504e55b963e1ef288ca1f5445d63014f262149a09994  mqtt-auth-biscuit/target/release/libmosquitto_auth_biscuit.so
+cbf9781b1644258301656bf2d33dd2a40dde9f5e1c196d84e172b21d2af2f152  mqtt-auth-biscuit/benchmarks/tokens.json
+47c425eb80edb48e285377e390b0cc4013cb278925f115f847fcdf351e626680  mqtt-auth-biscuit/benchmarks/password-map.json
+f764cebf20c927c2a4dbefa317b34ca7daf492a96c1b16632f1c3294025be2b8  mqtt-auth-biscuit/docker/docker-compose.yml
+dadfd360c0303c6389fa5cc6f6c2d71b09c2e6e3d81e5686a79987c685c6cce6  mqtt-auth-biscuit/docker/docker-compose.tls.yml
+172d8863fa219179805bc449b2fbbafed60178c147c04cb74540b6fdca1a2ab3  mqtt-auth-biscuit/docker/image-freeze.json

@@ -1,0 +1,72 @@
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-clippy-fix
+        name: cargo clippy --fix
+        entry: >
+          bash -c 'cargo clippy --fix --locked --allow-dirty --allow-staged --manifest-path mqtt-auth-biscuit/Cargo.toml || true;
+          cargo clippy --locked --all-targets --manifest-path mqtt-auth-biscuit/Cargo.toml -- -W clippy::pedantic -W clippy::nursery'
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: >
+          bash -c 'cargo fmt --all --manifest-path mqtt-auth-biscuit/Cargo.toml || true; cargo fmt --all --manifest-path mqtt-auth-biscuit/Cargo.toml -- --check'
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --locked --manifest-path mqtt-auth-biscuit/Cargo.toml
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: cargo-fmt-tools
+        name: cargo fmt tools
+        entry: cargo fmt --all --manifest-path Cargo.toml -- --check
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: cargo-test-tools
+        name: cargo test tools
+        entry: cargo test --locked --workspace
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: ruff-check
+        name: ruff check
+        entry: bash -c 'uv run --locked --group dev ruff check --fix --exit-zero . && uv run --locked --group dev ruff check .'
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: ruff-format
+        name: ruff format
+        entry: bash -c 'uv run --locked --group dev ruff format .'
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: mypy
+        name: mypy
+        entry: uv run --locked --group dev mypy mqtt-auth-biscuit
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: pyrefly
+        name: pyrefly
+        entry: uv run --locked --group dev pyrefly check mqtt-auth-biscuit
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: pin-audit
+        name: reproducibility audit
+        entry: ./scripts/check-pins
+        language: system
+        pass_filenames: false
+        stages: [commit, push]
+      - id: python-tests
+        name: python tests
+        entry: ./run_python_tests.sh
+        language: system
+        pass_filenames: false
+        stages: [commit, push]

@@ -1,0 +1,576 @@
+{
+  "result_schema_version": 2,
+  "generated_at": "2026-10-24T08:54:18.135492+00:00",
+  "input_dir": "/home/eagle/tccfinal-c200q2-20261024T081720Z/results",
+  "scenario_count": 1,
+  "scenarios": [
+    {
+      "scenario": "HTTP-LATENCY-1000MS-JWT",
+      "file": "HTTP-LATENCY-1000MS-JWT.json",
+      "runs": 1,
+      "token_len": 338,
+      "tls": {
+        "enabled": false,
+        "ca_file": null,
+        "insecure": false,
+        "purpose": "transport_encryption",
+        "certificate_validation_tested": false
+      },
+      "parity": {
+        "token_issuer_no_default_roles": false,
+        "token_issuer_no_default_grants": false,
+        "token_refresh_codes": null
+      },
+      "scenario_config": {
+        "jwt_identity_binding": "off",
+        "biscuit_identity_binding": "off",
+        "semantic_class": "capability",
+        "clients": 200,
+        "requested_clients": 200,
+        "client_count": null,
+        "messages": 10,
+        "requested_messages": 10,
+        "workload_shape": "matrix",
+        "workload_axes": {
+          "clients": "cli",
+          "messages": "cli"
+        },
+        "qos": 2,
+        "requested_qos": 2,
+        "qos_distribution": null,
+        "requested_qos_distribution": null,
+        "token_issuer_no_default_roles": false,
+        "token_issuer_no_default_grants": false,
+        "proactive_refresh": false,
+        "proactive_refresh_margin_seconds": null,
+        "proactive_refresh_timeout_seconds": null,
+        "proactive_refresh_assert_continuity": false,
+        "reauth_storm": false,
+        "credential_mode": "per_client",
+        "password_map_profile": "jwt",
+        "fanout_publisher_password_map_profile": null,
+        "traffic_pattern": null,
+        "workload_kind": null,
+        "authorization_probe_count": null,
+        "fanout_topic": null,
+        "subscriber_count": null,
+        "policy_source": "http",
+        "authz_profile": "simple",
+        "authorizer_profile": null,
+        "acl_read_enforcement": "expiry_only",
+        "fanout_churn_kind": null,
+        "fanout_churn_after_messages": null,
+        "fanout_churn_interval_messages": null,
+        "fanout_churn_max_events": null,
+        "fanout_churn_settle_ms": null,
+        "fanout_churn_control_topic": null,
+        "fanout_churn_control_payload": null,
+        "runtime_control_after_messages": null,
+        "runtime_control_expect_denial": false,
+        "sqlite_seed_fanout": null,
+        "sqlite_seed_profile": null,
+        "sqlite_seed_db": null,
+        "sqlite_seed_topic": null,
+        "sqlite_seed_subscribers": null,
+        "fanout_churn_sqlite_db": null,
+        "fanout_churn_sqlite_topic": null,
+        "fanout_churn_sqlite_subscribers": null,
+        "http_expected_delay_ms": 1000,
+        "http_timeout_budget_delay_ms": null,
+        "publish_timeout_seconds": 415,
+        "connect_timeout_seconds": 415,
+        "keepalive_seconds": 215,
+        "client_topology": {
+          "mode": "container-per-client",
+          "effective_mode": "container-per-client",
+          "loadgen_service": "loadgen",
+          "cpus": "1.0",
+          "memory": "96m",
+          "cpuset": null,
+          "internal_mqtt_host": "mosquitto",
+          "internal_token_issuer_url": "http://token-issuer:8082"
+        },
+        "cache_context": {
+          "acl_read_enforcement_expected": "expiry_only",
+          "cache_ttl_seconds": 3600,
+          "note": "strict ACL_READ scenarios should enforce policy changes on fan-out delivery; cache must not mask runtime authorization changes"
+        }
+      },
+      "credential_attestations": {
+        "clients": {
+          "profile": "jwt",
+          "semantic": null,
+          "validated_credentials": 200
+        }
+      },
+      "loadgen": {
+        "throughput_mps": {
+          "avg": 0.9582233612862365,
+          "min": 0.9582233612862365,
+          "max": 0.9582233612862365
+        },
+        "publish_throughput_mps": {
+          "avg": 0.9582233612862365,
+          "min": 0.9582233612862365,
+          "max": 0.9582233612862365
+        },
+        "receive_throughput_mps": {
+          "avg": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "connect": {
+          "count_total": 200,
+          "min_ms": {
+            "avg": 132.84200199999998,
+            "min": 132.84200199999998,
+            "max": 132.84200199999998
+          },
+          "p50_ms": {
+            "avg": 243.05678500000002,
+            "min": 243.05678500000002,
+            "max": 243.05678500000002
+          },
+          "p95_ms": {
+            "avg": 1088.6356179,
+            "min": 1088.6356179,
+            "max": 1088.6356179
+          },
+          "p99_ms": {
+            "avg": 1097.31820738,
+            "min": 1097.31820738,
+            "max": 1097.31820738
+          },
+          "max_ms": {
+            "avg": 1105.4255529999998,
+            "min": 1105.4255529999998,
+            "max": 1105.4255529999998
+          },
+          "mean_ms": {
+            "avg": 343.96039061999994,
+            "min": 343.96039061999994,
+            "max": 343.96039061999994
+          },
+          "median_ms": {
+            "avg": 243.05678500000002,
+            "min": 243.05678500000002,
+            "max": 243.05678500000002
+          }
+        },
+        "publish": {
+          "count_total": 2000,
+          "min_ms": {
+            "avg": 5017.71104,
+            "min": 5017.71104,
+            "max": 5017.71104
+          },
+          "p50_ms": {
+            "avg": 200446.759847,
+            "min": 200446.759847,
+            "max": 200446.759847
+          },
+          "p95_ms": {
+            "avg": 204465.7115953,
+            "min": 204465.7115953,
+            "max": 204465.7115953
+          },
+          "p99_ms": {
+            "avg": 204470.70526453,
+            "min": 204470.70526453,
+            "max": 204470.70526453
+          },
+          "max_ms": {
+            "avg": 204474.802332,
+            "min": 204474.802332,
+            "max": 204474.802332
+          },
+          "mean_ms": {
+            "avg": 200083.5999973265,
+            "min": 200083.5999973265,
+            "max": 200083.5999973265
+          },
+          "median_ms": {
+            "avg": 200446.759847,
+            "min": 200446.759847,
+            "max": 200446.759847
+          }
+        },
+        "publish_qos_0": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "publish_qos_1": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "publish_qos_2": {
+          "count_total": 2000,
+          "min_ms": {
+            "avg": 5017.71104,
+            "min": 5017.71104,
+            "max": 5017.71104
+          },
+          "p50_ms": {
+            "avg": 200446.759847,
+            "min": 200446.759847,
+            "max": 200446.759847
+          },
+          "p95_ms": {
+            "avg": 204465.7115953,
+            "min": 204465.7115953,
+            "max": 204465.7115953
+          },
+          "p99_ms": {
+            "avg": 204470.70526453,
+            "min": 204470.70526453,
+            "max": 204470.70526453
+          },
+          "max_ms": {
+            "avg": 204474.802332,
+            "min": 204474.802332,
+            "max": 204474.802332
+          },
+          "mean_ms": {
+            "avg": 200083.5999973265,
+            "min": 200083.5999973265,
+            "max": 200083.5999973265
+          },
+          "median_ms": {
+            "avg": 200446.759847,
+            "min": 200446.759847,
+            "max": 200446.759847
+          }
+        },
+        "token_refresh": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "token_refresh_len": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "delegation": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "delegation_len": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "attenuation": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "attenuation_len": {
+          "count_total": 0,
+          "min_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p50_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p95_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "p99_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "max_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "mean_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          },
+          "median_ms": {
+            "avg": null,
+            "min": null,
+            "max": null
+          }
+        },
+        "http_rules_examined_per_request": {
+          "avg": null,
+          "min": null,
+          "max": null
+        }
+      },
+      "mqtt5_auth": null,
+      "resources": {
+        "cpu_usage_seconds": {
+          "avg": 34.522584,
+          "min": 34.522584,
+          "max": 34.522584
+        },
+        "memory_peak_bytes": {
+          "avg": 15175680.0,
+          "min": 15175680.0,
+          "max": 15175680.0
+        },
+        "memory_mean_bytes": {
+          "avg": 6074653.630481668,
+          "min": 6074653.630481668,
+          "max": 6074653.630481668
+        },
+        "memory_sample_count": {
+          "avg": 1391.0,
+          "min": 1391.0,
+          "max": 1391.0
+        },
+        "unavailable_runs": 0
+      },
+      "errors": {
+        "total": 0,
+        "unique": []
+      }
+    }
+  ]
+}

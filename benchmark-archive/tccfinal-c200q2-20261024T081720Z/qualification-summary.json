@@ -1,0 +1,124 @@
+{
+  "c200_q2": {
+    "clients": 200,
+    "messages": 10,
+    "qos": 2,
+    "status": "PASS",
+    "wall_start": "2026-10-24T08:19:12Z",
+    "wall_end": "2026-10-24T08:54:18Z",
+    "wall_s": 2106,
+    "connect": {
+      "count": 200,
+      "p50_ms": 243.05678500000002,
+      "p95_ms": 1088.6356179,
+      "p99_ms": 1097.31820738,
+      "max_ms": 1105.4255529999998
+    },
+    "publish": {
+      "count": 2000,
+      "p50_ms": 200446.759847,
+      "p95_ms": 204465.7115953,
+      "p99_ms": 204470.70526453,
+      "max_ms": 204474.802332,
+      "mean_ms": 200083.5999973265
+    },
+    "publish_outcomes": {
+      "attempted": 2000,
+      "succeeded": 2000,
+      "failed": 0
+    },
+    "qos2": 2000,
+    "authz": {
+      "requests": 2000,
+      "allows": 2000,
+      "denies": 0,
+      "failures": 0
+    },
+    "broker": {
+      "jwt_validations": 200,
+      "cache_hits": 2000,
+      "auth_failures": 0,
+      "authz_checks": 2000,
+      "authz_allows": 2000
+    },
+    "keepalive_s": 215,
+    "publish_timeout_s": 415,
+    "timeout_headroom_s": 210.525197668,
+    "timeout_headroom_pct": 50.729,
+    "barrier": {
+      "participants": 200,
+      "ready_count": 200,
+      "max_ready_skew_ms": 51326.0,
+      "release_epoch": 1792830022135,
+      "interval_s": 53.124
+    },
+    "startup": {
+      "first_create": "2026-10-24T08:19:29Z",
+      "last_start": "2026-10-24T08:20:21Z",
+      "first_create_to_last_start_s": 52.0
+    },
+    "errors": [],
+    "result_contract": "PASS",
+    "session_continuity_ok": true,
+    "throughput_mps": 0.9582233612862365,
+    "resources": {
+      "max_running": 200,
+      "min_mem_available_mb": 6580,
+      "max_load1": 13.62
+    }
+  },
+  "budget_table": [
+    {
+      "clients": 10,
+      "delay_ms": 200,
+      "service_round_s": 2.0,
+      "publish_timeout_s": 17,
+      "keepalive_s": 60
+    },
+    {
+      "clients": 50,
+      "delay_ms": 200,
+      "service_round_s": 10.0,
+      "publish_timeout_s": 25,
+      "keepalive_s": 60
+    },
+    {
+      "clients": 200,
+      "delay_ms": 200,
+      "service_round_s": 40.0,
+      "publish_timeout_s": 95,
+      "keepalive_s": 60
+    },
+    {
+      "clients": 10,
+      "delay_ms": 1000,
+      "service_round_s": 10.0,
+      "publish_timeout_s": 25,
+      "keepalive_s": 60
+    },
+    {
+      "clients": 50,
+      "delay_ms": 1000,
+      "service_round_s": 50.0,
+      "publish_timeout_s": 115,
+      "keepalive_s": 65
+    },
+    {
+      "clients": 200,
+      "delay_ms": 1000,
+      "service_round_s": 200.0,
+      "publish_timeout_s": 415,
+      "keepalive_s": 215
+    }
+  ],
+  "invariants": {
+    "matrix": 22,
+    "part2_total": 1512,
+    "startup_barrier_s": 120
+  },
+  "runtime_freeze_classification": {
+    "loadgen": "must rebuild; Rust keepalive plumbing changed and canonical 23f496 lacks --keepalive-seconds",
+    "sync_barrier": "shares crates/benchmarks build context; rebuild recommended for provenance even though binary path is unchanged",
+    "other_8_images": "reuse existing IDs"
+  }
+}

@@ -1,0 +1,678 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running `target/debug/run-benchmarks --scenarios HTTP-LATENCY-200MS-BISCUIT --workload-shape matrix --clients 10 --messages 10 --client-topology container-per-client --client-memory 96m --skip-build --skip-tokens`
+Using docker compose: docker compose
+Skipping build (per --skip-build)
+Skipping token generation (per --skip-tokens)
+Running scenarios...
+[21:39:21] INFO     Packet capture enabled using dpkt      run_scenarios.py:8096
+                    parser (version: 1.9.8)                                     
+           INFO     Filter: port 1883 or port 8883,        run_scenarios.py:8101
+                    Duration: 300s                                              
+No stopped containers
+ Image docker-authz Building 
+ Image docker-token-issuer Building 
+ Image mosquitto:2.1.3-custom Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.56kB done
+#1 DONE 0.0s
+
+#2 [authz internal] load build definition from Dockerfile.authz
+#2 transferring dockerfile: 763B done
+#2 DONE 0.1s
+
+#3 [mosquitto internal] load build definition from Dockerfile.mosquitto.custom
+#3 transferring dockerfile: 2.25kB done
+#3 DONE 0.1s
+
+#4 [token-issuer internal] load build definition from Dockerfile.token-issuer
+#4 transferring dockerfile: 769B done
+#4 DONE 0.1s
+
+#5 [authz internal] load metadata for docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#5 DONE 0.1s
+
+#6 [mosquitto internal] load metadata for docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#6 DONE 0.1s
+
+#7 [token-issuer internal] load metadata for gcr.io/distroless/cc-debian12@sha256:329e54034ce498f9c6b345044e8f530c6691f99e94a92446f68c0adf9baa8464
+#7 DONE 0.1s
+
+#8 [authz internal] load .dockerignore
+#8 transferring context: 2B done
+#8 DONE 0.0s
+
+#9 [token-issuer internal] load build context
+#9 DONE 0.0s
+
+#10 [authz internal] load build context
+#10 DONE 0.0s
+
+#11 [mosquitto internal] load build context
+#11 transferring context: 834.85kB 0.0s done
+#11 DONE 0.0s
+
+#12 [mosquitto builder 1/7] FROM docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#12 resolve docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d 0.1s done
+#12 resolve docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d 0.1s done
+#12 DONE 0.1s
+
+#13 [token-issuer stage-1 1/2] FROM gcr.io/distroless/cc-debian12@sha256:329e54034ce498f9c6b345044e8f530c6691f99e94a92446f68c0adf9baa8464
+#13 resolve gcr.io/distroless/cc-debian12@sha256:329e54034ce498f9c6b345044e8f530c6691f99e94a92446f68c0adf9baa8464 0.1s done
+#13 DONE 0.1s
+
+#14 [authz stage-1 1/3] FROM docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#14 resolve docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 0.1s done
+#14 DONE 0.1s
+
+#10 [authz internal] load build context
+#10 transferring context: 273B done
+#10 DONE 0.0s
+
+#9 [token-issuer internal] load build context
+#9 transferring context: 2.61kB done
+#9 DONE 0.1s
+
+#15 [authz builder 4/7] COPY Cargo.toml Cargo.lock ./
+#15 CACHED
+
+#16 [authz builder 7/7] RUN cargo build --release -p authz-server
+#16 CACHED
+
+#17 [authz builder 2/7] RUN apk add --no-cache musl-dev=1.2.5-r23
+#17 CACHED
+
+#18 [authz builder 3/7] WORKDIR /app
+#18 CACHED
+
+#19 [authz stage-1 2/3] RUN apk add --no-cache ca-certificates=20260611-r0
+#19 CACHED
+
+#20 [authz builder 5/7] COPY crates/authz-server ./crates/authz-server
+#20 CACHED
+
+#21 [authz builder 6/7] RUN printf '[workspace]\nmembers = ["crates/authz-server"]\nresolver = "2"\n' > Cargo.toml
+#21 CACHED
+
+#22 [authz stage-1 3/3] COPY --from=builder /app/target/release/authz-server /usr/local/bin/authz-server
+#22 CACHED
+
+#23 [token-issuer builder 5/9] COPY crates/mosquitto-plugin ./crates/mosquitto-plugin
+#23 CACHED
+
+#24 [token-issuer builder 7/9] COPY crates/token-issuer ./crates/token-issuer
+#24 CACHED
+
+#25 [token-issuer builder 4/9] COPY Cargo.toml Cargo.lock ./
+#25 CACHED
+
+#26 [token-issuer builder 6/9] COPY crates/authz-server ./crates/authz-server
+#26 CACHED
+
+#27 [token-issuer builder 9/9] RUN cargo build --release -p token-issuer
+#27 CACHED
+
+#28 [token-issuer builder 8/9] RUN printf '[workspace]\nmembers = ["crates/token-issuer"]\nresolver = "2"\n' > Cargo.toml
+#28 CACHED
+
+#29 [token-issuer stage-1 2/2] COPY --from=builder /app/target/release/token-issuer /usr/local/bin/token-issuer
+#29 CACHED
+
+#18 [token-issuer builder 3/7] WORKDIR /app
+#18 CACHED
+
+#17 [token-issuer builder 2/7] RUN apk add --no-cache musl-dev=1.2.5-r23
+#17 CACHED
+
+#30 [mosquitto plugin-builder  2/10] RUN apk add --no-cache build-base=0.5-r3 cmake=4.1.3-r0 perl=5.42.2-r0 musl-dev=1.2.5-r23
+#30 CACHED
+
+#31 [mosquitto stage-2 3/6] COPY --from=mosq-builder /out/ /
+#31 CACHED
+
+#32 [mosquitto plugin-builder 10/10] RUN strip --strip-unneeded /app/target/release/libmosquitto_auth_biscuit.so
+#32 CACHED
+
+#33 [mosquitto stage-2 4/6] COPY --from=plugin-builder /app/target/release/libmosquitto_auth_biscuit.so /mosquitto/plugins/
+#33 CACHED
+
+#34 [mosquitto plugin-builder  3/10] WORKDIR /app
+#34 CACHED
+
+#35 [mosquitto mosq-builder 7/8] RUN make prefix=/usr WITH_SHARED_LIBRARIES=yes WITH_DOCS=no WITH_EDITLINE=no WITH_HTTP_API=no WITH_SQLITE=no install DESTDIR=/out
+#35 CACHED
+
+#36 [mosquitto plugin-builder  5/10] COPY crates/mosquitto-plugin ./crates/mosquitto-plugin
+#36 CACHED
+
+#37 [mosquitto plugin-builder  9/10] RUN RUSTFLAGS="-C target-feature=-crt-static -C strip=symbols" cargo build --release -p mosquitto-auth-biscuit
+#37 CACHED
+
+#38 [mosquitto mosq-builder 2/8] RUN apk add --no-cache git=2.52.0-r0 build-base=0.5-r3 cmake=4.1.3-r0 openssl-dev=3.5.8-r0 cjson-dev=1.7.19-r1 libwebsockets-dev=4.3.5-r2 c-ares-dev=1.34.8-r0
+#38 CACHED
+
+#39 [mosquitto mosq-builder 6/8] RUN make -j"$(nproc)" prefix=/usr WITH_SHARED_LIBRARIES=yes WITH_DOCS=no WITH_EDITLINE=no WITH_HTTP_API=no WITH_SQLITE=no
+#39 CACHED
+
+#40 [mosquitto stage-2 2/6] RUN apk add --no-cache ca-certificates=20260611-r0 libgcc=15.2.0-r2 libstdc++=15.2.0-r2 openssl=3.5.8-r0 cjson=1.7.19-r1 libwebsockets=4.3.5-r2 c-ares=1.34.8-r0
+#40 CACHED
+
+#41 [mosquitto mosq-builder 5/8] RUN git checkout "b3b4d77ef3faef6dfcdfac3fb00a9b5a42859aca"
+#41 CACHED
+
+#42 [mosquitto stage-2 5/6] COPY docker/jwt_public.pem /mosquitto/config/
+#42 CACHED
+
+#43 [mosquitto mosq-builder 8/8] RUN set -eux;     for f in /out/usr/sbin/mosquitto /out/usr/lib/libmosquitto.so.1 /out/usr/lib/libmosquitto_common.so.1 /out/usr/lib/mosquitto_*.so /out/usr/bin/mosquitto_*; do         [ -e "$f" ] || continue;         strip --strip-unneeded "$f" || true;     done
+#43 CACHED
+
+#44 [mosquitto plugin-builder  7/10] COPY crates/authz-server ./crates/authz-server
+#44 CACHED
+
+#45 [mosquitto plugin-builder  6/10] COPY crates/token-issuer ./crates/token-issuer
+#45 CACHED
+
+#46 [mosquitto plugin-builder  8/10] RUN printf '[workspace]\nmembers = ["crates/mosquitto-plugin"]\nresolver = "2"\n' > Cargo.toml
+#46 CACHED
+
+#47 [mosquitto plugin-builder  4/10] COPY Cargo.toml Cargo.lock ./
+#47 CACHED
+
+#48 [mosquitto mosq-builder 4/8] WORKDIR /src
+#48 CACHED
+
+#49 [mosquitto mosq-builder 3/8] RUN git clone https://github.com/eclipse-mosquitto/mosquitto.git /src
+#49 CACHED
+
+#50 [mosquitto stage-2 6/6] COPY docker/biscuit_public.key /mosquitto/config/
+#50 CACHED
+
+#51 [mosquitto] exporting to image
+#51 exporting layers done
+#51 exporting manifest sha256:d6fe045cd033704f774073e773540f835bf49fb7cda47319b397d754c396066e 0.0s done
+#51 exporting config sha256:3f3919fabc6be545885a09ad59c971af7ff415b467499588c2b9b6ca5fe247f3 0.0s done
+#51 exporting attestation manifest sha256:8114a93394460dfba5fc4d4fa1c07a90e234146bbfb9358bfd6149af507d0228
+#51 exporting attestation manifest sha256:8114a93394460dfba5fc4d4fa1c07a90e234146bbfb9358bfd6149af507d0228 0.1s done
+#51 exporting manifest list sha256:030709d3e8d62d3b680a971e7a4f2f91b496d25052e1d8f9fdc923397486af90
+#51 exporting manifest list sha256:030709d3e8d62d3b680a971e7a4f2f91b496d25052e1d8f9fdc923397486af90 0.1s done
+#51 naming to docker.io/library/mosquitto:2.1.3-custom 0.1s done
+#51 unpacking to docker.io/library/mosquitto:2.1.3-custom
+#51 unpacking to docker.io/library/mosquitto:2.1.3-custom 0.1s done
+#51 DONE 0.5s
+
+#52 [token-issuer] exporting to image
+#52 exporting layers done
+#52 exporting manifest sha256:f577dfab678df2d19b841260f218ee0f6e52c31f15ea9c5d345c2dfc84a0bde7 0.0s done
+#52 exporting config sha256:f8977121b3d0110617833846ef5c383d98158cb00ca693934536b5779c6bd71b 0.0s done
+#52 exporting attestation manifest sha256:f2db0073e3c3833289e4685043ffc8bf62d9bf66d2881cbfb4e04d41582957a7 0.1s done
+#52 exporting manifest list sha256:942409d9d2b8b4c84f42d73338a60d0cad062d5170f886d7de24f719fe775e63 0.1s done
+#52 naming to docker.io/library/docker-token-issuer:latest 0.0s done
+#52 unpacking to docker.io/library/docker-token-issuer:latest 0.1s done
+#52 DONE 0.5s
+
+#53 [authz] exporting to image
+#53 exporting layers done
+#53 exporting manifest sha256:0e9dfb7c1f6644cf7fd1ac80e454804b4a98f2460a535fd4e25781c62311ba6d 0.0s done
+#53 exporting config sha256:893f6151d18c5c357f98812e5aa52d354c11ec3d32d84731d1972776efcbb222 0.0s done
+#53 exporting attestation manifest sha256:62cfe738909cfa2d862cc57557045c5b1f7289e8855694a558864e387c34ca27 0.1s done
+#53 exporting manifest list sha256:c95bc5bcaf46103fc2a501cb81c9b799ffb132bf44127cb113ea2e333a6856ca 0.1s done
+#53 naming to docker.io/library/docker-authz:latest 0.1s done
+#53 unpacking to docker.io/library/docker-authz:latest 0.1s done
+#53 DONE 0.5s
+
+#54 [token-issuer] resolving provenance for metadata file
+#54 ...
+
+#55 [authz] resolving provenance for metadata file
+#55 DONE 0.1s
+
+#54 [token-issuer] resolving provenance for metadata file
+#54 DONE 0.2s
+
+#56 [mosquitto] resolving provenance for metadata file
+#56 DONE 0.0s
+ Image mosquitto:2.1.3-custom Built 
+ Image docker-token-issuer Built 
+ Image docker-authz Built 
+ Container docker-token-issuer-1 Creating 
+ Container docker-metrics-collector-1 Creating 
+ Container docker-authz-1 Creating 
+ Container docker-cadvisor-1 Creating 
+ Container docker-iperf3-1 Creating 
+ Container docker-mosquitto-1 Creating 
+ Container docker-iperf3-1 Created 
+ Container docker-authz-1 Created 
+ Container docker-cadvisor-1 Created 
+ Container docker-token-issuer-1 Created 
+ Container docker-mosquitto-1 Created 
+ Container docker-metrics-collector-1 Created 
+ Container docker-metrics-collector-1 Starting 
+ Container docker-mosquitto-1 Starting 
+ Container docker-iperf3-1 Starting 
+ Container docker-token-issuer-1 Starting 
+ Container docker-cadvisor-1 Starting 
+ Container docker-authz-1 Starting 
+ Container docker-metrics-collector-1 Started 
+ Container docker-mosquitto-1 Started 
+ Container docker-iperf3-1 Started 
+ Container docker-token-issuer-1 Started 
+ Container docker-cadvisor-1 Started 
+ Container docker-authz-1 Started 
+ Image docker-netem Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 527B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile.netem
+#2 transferring dockerfile: 320B done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#3 DONE 0.1s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [1/4] FROM docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#5 resolve docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 0.0s done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 1.12kB done
+#6 DONE 0.0s
+
+#7 [2/4] RUN apk add --no-cache ethtool=6.15-r0 iproute2=6.17.0-r0
+#7 CACHED
+
+#8 [3/4] COPY docker/netem_entrypoint.sh /netem_entrypoint.sh
+#8 CACHED
+
+#9 [4/4] RUN chmod +x /netem_entrypoint.sh
+#9 CACHED
+
+#10 exporting to image
+#10 exporting layers done
+#10 exporting manifest sha256:603125fcaba7040282e905abb020edbc8038f83a2a88f7a873a065bc91b5a5e4 0.0s done
+#10 exporting config sha256:909de252ad07fe9a4588b4c5bc0916475f5d90a7539db77cd3ab74cfa09f452c done
+#10 exporting attestation manifest sha256:64cafd694b544fc11a0cfdb10163b849874cdba436dc693fa655e4b27417d950 0.0s done
+#10 exporting manifest list sha256:1d6603be8e2a4a7d671ad12e31beb08a83e3225e708112bf5206e5484ff4d227
+#10 exporting manifest list sha256:1d6603be8e2a4a7d671ad12e31beb08a83e3225e708112bf5206e5484ff4d227 0.0s done
+#10 naming to docker.io/library/docker-netem:latest done
+#10 unpacking to docker.io/library/docker-netem:latest 0.0s done
+#10 DONE 0.2s
+
+#11 resolving provenance for metadata file
+#11 DONE 0.0s
+ Image docker-netem Built 
+ Container docker-netem-1 Creating 
+ Container docker-netem-1 Created 
+ Container docker-netem-1 Starting 
+ Container docker-netem-1 Started 
+[21:39:28] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8081/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8082/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=up                 
+                    "HTTP/1.1 200 OK"                                           
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A6b181b7e2032.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A6b181b7e2032.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[21:39:30] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A6b181b7e2032.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A6b181b7e2032.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[21:39:32] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=con                
+                    tainer_cpu_usage_seconds_total%7Bid%3D~%22.%                
+                    2A6b181b7e2032.%2A%22%7D "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28container_memory_working_set_bytes%7Bid%3                
+                    D~%22.%2A6b181b7e2032.%2A%22%7D%29 "HTTP/1.1                
+                    200 OK"                                                     
+[21:39:34] INFO     Running iperf3 baseline: 4 streams, 5s iperf3_baseline.py:63
+                    duration, reverse=True                                      
+[21:39:39] INFO     iperf3 baseline complete: 64981.90    iperf3_baseline.py:212
+                    Mbps, 0.00 ms RTT                                           
+           INFO     Network baseline: 64981.90 Mbps        run_scenarios.py:8395
+                    capacity confirmed                                          
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8081/config/reset "HTTP/2                  
+                    200 OK"                                                     
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8081/config "HTTP/2 200 OK"                
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8081/stats/reset "HTTP/2                   
+                    200 OK"                                                     
+ Image docker-loadgen Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 519B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile.loadgen
+#2 transferring dockerfile: 1.06kB done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#3 DONE 0.0s
+
+#4 [internal] load metadata for docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#4 DONE 0.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 511B done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 DONE 0.0s
+
+#7 [builder 1/7] FROM docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#7 resolve docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d 0.0s done
+#7 DONE 0.0s
+
+#8 [stage-1 1/7] FROM docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#8 resolve docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 0.0s done
+#8 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 1.47kB done
+#6 DONE 0.0s
+
+#9 [stage-1 2/7] RUN apk add --no-cache ca-certificates=20260611-r0 ethtool=6.15-r0 iproute2=6.17.0-r0
+#9 CACHED
+
+#10 [stage-1 3/7] WORKDIR /workspace
+#10 CACHED
+
+#11 [builder 2/7] RUN apk add --no-cache musl-dev=1.2.5-r23
+#11 CACHED
+
+#12 [stage-1 6/7] COPY mqtt-auth-biscuit/docker/loadgen_entrypoint.sh /usr/local/bin/loadgen-entrypoint
+#12 CACHED
+
+#13 [builder 6/7] RUN printf '[workspace]\nmembers = ["crates/benchmarks"]\nresolver = "2"\n' > Cargo.toml
+#13 CACHED
+
+#14 [builder 4/7] COPY mqtt-auth-biscuit/Cargo.toml mqtt-auth-biscuit/Cargo.lock ./
+#14 CACHED
+
+#15 [stage-1 5/7] COPY --from=builder /app/target/release/mqtt-auth-client /usr/local/bin/mqtt-auth-client
+#15 CACHED
+
+#16 [builder 7/7] RUN cargo build --release -p gen-tokens --bin mqtt-loadgen --bin mqtt-auth-client
+#16 CACHED
+
+#17 [stage-1 4/7] COPY --from=builder /app/target/release/mqtt-loadgen /usr/local/bin/mqtt-loadgen
+#17 CACHED
+
+#18 [builder 5/7] COPY mqtt-auth-biscuit/crates/benchmarks ./crates/benchmarks
+#18 CACHED
+
+#19 [builder 3/7] WORKDIR /app
+#19 CACHED
+
+#20 [stage-1 7/7] RUN chmod +x /usr/local/bin/loadgen-entrypoint
+#20 CACHED
+
+#21 exporting to image
+#21 exporting layers done
+#21 exporting manifest sha256:e793fbd98e5c2adaa69633c1235f3750cdc2aaf252961fb01b25fd98bce570ad done
+#21 exporting config sha256:84a06838fbf44554cd711fa69597ec29aa4e397171cccfec7beddd6d6deb8ad9 done
+#21 exporting attestation manifest sha256:9cbed5d7226c2f13126c38977a69164ef429eb1cb0a5f0342f4f9d7133bd1dad done
+#21 exporting manifest list sha256:e2d5d6dd480ecf20ebb5dbb18183b96fc390f0bd2eb59c71e7e8d729b70f15ec done
+#21 naming to docker.io/library/docker-loadgen:latest done
+#21 unpacking to docker.io/library/docker-loadgen:latest done
+#21 DONE 0.0s
+
+#22 resolving provenance for metadata file
+#22 DONE 0.0s
+ Image docker-loadgen Built 
+ Container docker-sync-barrier-1 Stopping 
+ Container docker-sync-barrier-1 Stopped 
+Going to remove docker-sync-barrier-1
+ Container docker-sync-barrier-1 Removing 
+ Container docker-sync-barrier-1 Removed 
+ Image docker-sync-barrier Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 544B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile.sync-barrier
+#2 transferring dockerfile: 768B done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#3 DONE 0.0s
+
+#4 [internal] load metadata for docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#4 DONE 0.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 511B done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 DONE 0.0s
+
+#7 [stage-1 1/3] FROM docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+#7 resolve docker.io/library/alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659 0.0s done
+#7 DONE 0.0s
+
+#8 [builder 1/7] FROM docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#8 resolve docker.io/library/rust:1.93.1-alpine@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d 0.0s done
+#8 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 1.13kB done
+#6 DONE 0.0s
+
+#9 [builder 3/7] WORKDIR /app
+#9 CACHED
+
+#10 [builder 7/7] RUN cargo build --release -p gen-tokens --bin sync-barrier
+#10 CACHED
+
+#11 [builder 2/7] RUN apk add --no-cache musl-dev=1.2.5-r23
+#11 CACHED
+
+#12 [builder 6/7] RUN printf '[workspace]\nmembers = ["crates/benchmarks"]\nresolver = "2"\n' > Cargo.toml
+#12 CACHED
+
+#13 [stage-1 2/3] RUN apk add --no-cache ca-certificates=20260611-r0
+#13 CACHED
+
+#14 [builder 4/7] COPY mqtt-auth-biscuit/Cargo.toml mqtt-auth-biscuit/Cargo.lock ./
+#14 CACHED
+
+#15 [builder 5/7] COPY mqtt-auth-biscuit/crates/benchmarks ./crates/benchmarks
+#15 CACHED
+
+#16 [stage-1 3/3] COPY --from=builder /app/target/release/sync-barrier /usr/local/bin/sync-barrier
+#16 CACHED
+
+#17 exporting to image
+#17 exporting layers done
+#17 exporting manifest sha256:4e7aebdb714c267ce8967f0f82d0b467bce0386f41697855ed88a389f78d7d79 done
+#17 exporting config sha256:9b9b27c296d62fab9485c1e5b8b54bd9f1c63807f9b7ed6438c07e39b7c9f25a done
+#17 exporting attestation manifest sha256:778851c2bd72607c239a61a0bae87675172500b6ff23960e94bb9639a6a42971 done
+#17 exporting manifest list sha256:eccc8fb58eef45160ef027c3d040e8fddcc7b200e0654070d6c2ae819fbb788c done
+#17 naming to docker.io/library/docker-sync-barrier:latest done
+#17 unpacking to docker.io/library/docker-sync-barrier:latest done
+#17 DONE 0.0s
+
+#18 resolving provenance for metadata file
+#18 DONE 0.0s
+ Image docker-sync-barrier Built 
+ Container docker-sync-barrier-1 Creating 
+ Container docker-sync-barrier-1 Created 
+ Container docker-sync-barrier-1 Starting 
+ Container docker-sync-barrier-1 Started 
+[21:39:51] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/health "HTTP/2 200 OK"                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+[21:39:52] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 404 Not Found"                                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 200 OK"                                         
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 200 OK"                                         
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 200 OK"                                         
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 200 OK"                                         
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/sta                
+                    tus "HTTP/2 200 OK"                                         
+           INFO     HTTP Request: POST                           _client.py:1025
+                    http://localhost:8083/runs/http_latency_200m                
+                    s_biscuit-1-1789346380268666214-e9edc590/rel                
+                    ease?participants=10 "HTTP/2 200 OK"                        
+[21:40:13] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:8081/stats "HTTP/2 200 OK"                 
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+[21:40:14] INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_cpu_usage_seconds_t                
+                    otal%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%2                
+                    9%29 "HTTP/1.1 200 OK"                                      
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query?query=max                
+                    %28timestamp%28container_memory_working_set_                
+                    bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%                
+                    29%29 "HTTP/1.1 200 OK"                                     
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=sum%28container_cpu_usage_seconds_total%7                
+                    Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%29&star                
+                    t=1789346377.9037259&end=1789346414.6537259&                
+                    step=0.25 "HTTP/1.1 200 OK"                                 
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28timestamp%28container_cpu_usage_sec                
+                    onds_total%7Bid%3D~%22.%2A6b181b7e2032.%2A%2                
+                    2%7D%29%29&start=1789346377.9037259&end=1789                
+                    346414.6537259&step=0.25 "HTTP/1.1 200 OK"                  
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28container_memory_working_set_bytes%                
+                    7Bid%3D~%22.%2A6b181b7e2032.%2A%22%7D%29&sta                
+                    rt=1789346377.9037259&end=1789346414.6537259                
+                    &step=0.25 "HTTP/1.1 200 OK"                                
+           INFO     HTTP Request: GET                            _client.py:1025
+                    http://localhost:9090/api/v1/query_range?que                
+                    ry=max%28timestamp%28container_memory_workin                
+                    g_set_bytes%7Bid%3D~%22.%2A6b181b7e2032.%2A%                
+                    22%7D%29%29&start=1789346377.9037259&end=178                
+                    9346414.6537259&step=0.25 "HTTP/1.1 200 OK"                 
+           INFO     Wrote                                  run_scenarios.py:9260
+                    benchmarks/results/HTTP-LATENCY-200MS-                      
+                    BISCUIT.json                                                
+[21:40:14] INFO     Summary written to                  aggregate_results.py:368
+                    /home/eagle/TCC2/mqtt-auth-biscuit/                         
+                    benchmarks/results/summary.json                             
+Cleaning up Docker services...

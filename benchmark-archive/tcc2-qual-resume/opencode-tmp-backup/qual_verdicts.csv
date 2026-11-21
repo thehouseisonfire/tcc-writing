@@ -1,0 +1,113 @@
+idx,scenario,verdict,reason,info
+0,BASELINE-NO-AUTH,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+1,BASELINE-NO-AUTH-QOS0,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+2,BASELINE-NO-AUTH-QOS0-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+3,BASELINE-NO-AUTH-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+4,CONTROL-INTERLEAVED-DATA-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+5,CONTROL-INTERLEAVED-DATA-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+6,CONTROL-INTERLEAVED-DATA-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+7,CONTROL-INTERLEAVED-DATA-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+8,DYNAMIC-SECURITY-ANONYMOUS-BASELINE,SUSPICIOUS,container_count=11 (cell expects 10),req_c=10 req_m=10 qos=1 | containers=11 | connect=11 | pub att=10 suc=10 fail=0
+9,DYNAMIC-SECURITY-ANONYMOUS-BASELINE-TLS,SUSPICIOUS,container_count=11 (cell expects 10),req_c=10 req_m=10 qos=1 | containers=11 | connect=11 | pub att=10 suc=10 fail=0
+10,DYNAMIC-SECURITY-BASELINE,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+11,DYNAMIC-SECURITY-BASELINE-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+12,DYNAMIC-SECURITY-CHURN,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+13,DYNAMIC-SECURITY-CHURN-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+14,HTTP-LATENCY-1000MS-JWT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+15,HTTP-LATENCY-1000MS-JWT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+16,HTTP-LATENCY-200MS-BISCUIT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+17,HTTP-LATENCY-200MS-BISCUIT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+18,HTTP-LATENCY-200MS-JWT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+19,HTTP-LATENCY-200MS-JWT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+20,HTTP-PROFILE-COMPLEX-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+21,HTTP-PROFILE-COMPLEX-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+22,HTTP-PROFILE-COMPLEX-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+23,HTTP-PROFILE-COMPLEX-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+24,HTTP-PROFILE-MED-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+25,HTTP-PROFILE-MED-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+26,HTTP-PROFILE-MED-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+27,HTTP-PROFILE-MED-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+28,HTTP-PROFILE-SIMPLE-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+29,HTTP-PROFILE-SIMPLE-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+30,HTTP-PROFILE-SIMPLE-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+31,HTTP-PROFILE-SIMPLE-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+32,HYBRID-FALLBACK-AUTHZ-DOWN-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+33,HYBRID-FALLBACK-AUTHZ-DOWN-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | http_requests_sum=100
+34,NETWORK-MTU-1500-BISCUIT-CHAIN-25,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+35,NETWORK-MTU-1500-BISCUIT-CHAIN-25-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+36,NETWORK-MTU-1500-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+37,NETWORK-MTU-1500-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+38,NETWORK-MTU-200-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+39,NETWORK-MTU-200-JWT-TLS,FAIL,runner exit_status=1; no result JSON (mqtt-auth-biscuit/benchmarks/results-qual-matrix-c10-m10-idx039-NETWORK-MTU-200-JWT-TLS/MISSING_JSON),
+40,NETWORK-MTU-500-BISCUIT-CHAIN-25,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+41,NETWORK-MTU-500-BISCUIT-CHAIN-25-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+42,NETWORK-MTU-500-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+43,NETWORK-MTU-500-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+44,NETWORK-MTU-9000-BISCUIT-CHAIN-25,FAIL,runner exit_status=1; no result JSON (mqtt-auth-biscuit/benchmarks/results-qual-matrix-c10-m10-idx044-NETWORK-MTU-9000-BISCUIT-CHAIN-25/MISSING_JSON),
+45,NETWORK-MTU-9000-BISCUIT-CHAIN-25-TLS,FAIL,runner exit_status=1; no result JSON (mqtt-auth-biscuit/benchmarks/results-qual-matrix-c10-m10-idx045-NETWORK-MTU-9000-BISCUIT-CHAIN-25-TLS/MISSING_JSON),
+46,NETWORK-MTU-9000-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | pcap_analysis=present
+47,NETWORK-MTU-9000-JWT-TLS,FAIL,runner exit_status=1; no result JSON (mqtt-auth-biscuit/benchmarks/results-qual-matrix-c10-m10-idx047-NETWORK-MTU-9000-JWT-TLS/MISSING_JSON),
+48,STATIC-ACL-FANOUT-BISCUIT,SUSPICIOUS,container_count=11 (cell expects 10),req_c=10 req_m=10 qos=1 | containers=11 | connect=11 | pub att=10 suc=10 fail=0
+49,STATIC-ACL-FANOUT-BISCUIT-TLS,SUSPICIOUS,container_count=11 (cell expects 10),req_c=10 req_m=10 qos=1 | containers=11 | connect=11 | pub att=10 suc=10 fail=0
+50,STATIC-ACL-FANOUT-JWT,SUSPICIOUS,container_count=11 (cell expects 10),req_c=10 req_m=10 qos=1 | containers=11 | connect=11 | pub att=10 suc=10 fail=0
+51,STATIC-ACL-FANOUT-JWT-TLS,SUSPICIOUS,container_count=11 (cell expects 10),req_c=10 req_m=10 qos=1 | containers=11 | connect=11 | pub att=10 suc=10 fail=0
+52,STATIC-ACL-PUBLISH-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+53,STATIC-ACL-PUBLISH-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+54,STATIC-ACL-PUBLISH-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+55,STATIC-ACL-PUBLISH-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+56,TOKEN-ATTENUATION-COMBINED-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+57,TOKEN-ATTENUATION-COMBINED-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+58,TOKEN-ATTENUATION-PUBLISH-ONLY-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+59,TOKEN-ATTENUATION-PUBLISH-ONLY-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+60,TOKEN-ATTENUATION-SUBSCRIBE-DENY-BISCUIT,PASS,all checks passed,"req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | denials=0 probes={'enabled': True, 'operation': 'subscribe', 'expected': 'deny', 'successes': 10, 'failures': 0}"
+61,TOKEN-ATTENUATION-SUBSCRIBE-DENY-BISCUIT-TLS,PASS,all checks passed,"req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | denials=0 probes={'enabled': True, 'operation': 'subscribe', 'expected': 'deny', 'successes': 10, 'failures': 0}"
+62,TOKEN-ATTENUATION-TTL-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+63,TOKEN-ATTENUATION-TTL-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+64,TOKEN-AUTHORIZER-PROFILE-CONTEXTUAL-BISCUIT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+65,TOKEN-AUTHORIZER-PROFILE-CONTEXTUAL-BISCUIT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+66,TOKEN-AUTHORIZER-PROFILE-RBAC-BISCUIT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+67,TOKEN-AUTHORIZER-PROFILE-RBAC-BISCUIT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+68,TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+69,TOKEN-AUTHORIZER-PROFILE-SIMPLE-BISCUIT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+70,TOKEN-BASELINE-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+71,TOKEN-BASELINE-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+72,TOKEN-BASELINE-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+73,TOKEN-BASELINE-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+74,TOKEN-COMPLEXITY-CHAIN-1-BISCUIT,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+75,TOKEN-COMPLEXITY-CHAIN-1-BISCUIT-TLS,FAIL,runner exit_status=1; no result JSON (NO_RESULTS_DIR),
+76,TOKEN-COMPLEXITY-CHAIN-25-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+77,TOKEN-COMPLEXITY-CHAIN-25-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+78,TOKEN-COMPLEXITY-CHAIN-5-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+79,TOKEN-COMPLEXITY-CHAIN-5-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+80,TOKEN-COMPLEXITY-DATALOG-HIGH-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+81,TOKEN-COMPLEXITY-DATALOG-HIGH-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+82,TOKEN-COMPLEXITY-DATALOG-LOW-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+83,TOKEN-COMPLEXITY-DATALOG-LOW-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+84,TOKEN-COMPLEXITY-DATALOG-MED-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+85,TOKEN-COMPLEXITY-DATALOG-MED-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+86,TOKEN-DELEGATION-HANDOFF-BISCUIT,SUSPICIOUS,container_count=11 (cell expects 10); connect.count=10 vs containers=11,req_c=10 req_m=10 qos=1 | containers=11 | connect=10 | pub att=100 suc=100 fail=0
+87,TOKEN-DELEGATION-HANDOFF-BISCUIT-TLS,SUSPICIOUS,container_count=11 (cell expects 10); connect.count=10 vs containers=11,req_c=10 req_m=10 qos=1 | containers=11 | connect=10 | pub att=100 suc=100 fail=0
+88,TOKEN-DELEGATION-SIMULATED-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+89,TOKEN-DELEGATION-SIMULATED-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+90,TOKEN-DELEGATION-TEMP-ONLY-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+91,TOKEN-DELEGATION-TEMP-ONLY-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+92,TOKEN-ISSUER-BASELINE-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+93,TOKEN-ISSUER-BASELINE-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+94,TOKEN-ISSUER-BASELINE-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+95,TOKEN-ISSUER-BASELINE-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+96,TOKEN-LIFECYCLE-SHORT-RECONNECT-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+97,TOKEN-LIFECYCLE-SHORT-RECONNECT-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+98,TOKEN-LIFECYCLE-SHORT-RECONNECT-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+99,TOKEN-LIFECYCLE-SHORT-RECONNECT-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+100,TOKEN-QOS-MIXED-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+101,TOKEN-QOS-MIXED-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+102,TOKEN-QOS-MIXED-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+103,TOKEN-QOS-MIXED-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+104,TOKEN-QOS2-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+105,TOKEN-QOS2-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+106,TOKEN-QOS2-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+107,TOKEN-QOS2-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0
+108,TOKEN-THUNDERING-HERD-BISCUIT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | sync parts=10 ready=10 skew=433.0
+109,TOKEN-THUNDERING-HERD-BISCUIT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | sync parts=10 ready=10 skew=770.0
+110,TOKEN-THUNDERING-HERD-JWT,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | sync parts=10 ready=10 skew=194.0
+111,TOKEN-THUNDERING-HERD-JWT-TLS,PASS,all checks passed,req_c=10 req_m=10 qos=1 | containers=10 | connect=10 | pub att=100 suc=100 fail=0 | sync parts=10 ready=10 skew=221.0

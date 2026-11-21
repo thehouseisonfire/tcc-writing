@@ -1,0 +1,88 @@
+{
+  "classification": "A",
+  "classification_detail": "Transient Docker/Compose/container-startup degradation unrelated to MQTT authorization watchdog; noncanonical project-scoped image/setup is a contributing setup factor, not proven sole cause.",
+  "run_id": "http_latency_1000ms_jwt-1-1792827307342620826-8421bd63",
+  "project": "docker",
+  "source_commit": "2f3222d3a9b802027eac927c458488fbb7afb908",
+  "canonical_loadgen_id": "sha256:23f49664c8550d20a6585b0693772ebe265d457c234d8fa17a71640b36a87167",
+  "diagnostic_loadgen_id": "sha256:7b50ea7f50e9557e406d68abc91f867e52d1ec5fda237e3e8d1c8828f190bab4",
+  "connect_budget_s": 240,
+  "publish_budget_s": 120,
+  "startup": {
+    "participants": 200,
+    "ready_count": 200,
+    "released": true,
+    "max_ready_skew_ms": 64679.0,
+    "barrier_start_epoch": 1792827307.342,
+    "barrier_release_epoch": 1792827373.885,
+    "barrier_interval_s": 66.543,
+    "first_create_utc": "2026-10-24T07:35:08Z",
+    "last_start_utc": "2026-10-24T07:36:13Z",
+    "first_create_to_last_start_s": 65.0,
+    "first_create_to_release_s": 65.885,
+    "connect_budget_headroom_s": 175.321,
+    "all_200_started": true
+  },
+  "connect": {
+    "count": 200,
+    "p50_ms": 230.9475225,
+    "p95_ms": 1105.49379385,
+    "p99_ms": 1149.60024805,
+    "max_ms": 1178.091836,
+    "errors": 0
+  },
+  "publish": {
+    "count": 2000,
+    "p50_ms": 200346.4319965,
+    "p95_ms": 200476.7559023,
+    "p99_ms": 200504.00384358,
+    "max_ms": 399710.265379,
+    "mean_ms": 190219.228609,
+    "attempted": 2000,
+    "succeeded": 2000,
+    "failed": 0,
+    "qos_1": 2000,
+    "timeout_headroom_s": 15.29,
+    "timeout_headroom_pct": 3.684
+  },
+  "authorization": {
+    "requests": 2000,
+    "policy_allows": 2000,
+    "policy_denies": 0,
+    "injected_failures": 0,
+    "broker_auth_attempts": 200,
+    "jwt_validations": 200,
+    "cache_hits": 2000,
+    "broker_auth_failures": 0,
+    "broker_authz_checks": 2000,
+    "broker_authz_allows": 2000,
+    "broker_authz_denies": 0
+  },
+  "errors_total": 0,
+  "wall_time_s": 2090,
+  "publish_throughput_mps": 0.9654098405110154,
+  "resources": {
+    "host_cores": 16,
+    "host_mem_gib": 23.2,
+    "max_running": 200,
+    "max_created": 200,
+    "max_load1": 9.8,
+    "min_mem_available_mb": 7028,
+    "oom": false
+  },
+  "verdict": "All 200 clients started, barrier readiness completed in 64.679 s max skew (well under both 240 s and 120 s), and the complete 2000-publish QoS1 workload passed with zero errors. The original Q3 120 s HOLD did not reproduce under the canonical global project. No startup-budget, keepalive, publish-timeout, or MQTT-watchdog defect is proven.",
+  "durable_correction": "No timeout/watchdog change. The only supported candidate is an operational/preflight guard that the active Compose project resolves to frozen images and requires no image build under no-build mode; do not implement without further reproduction.",
+  "cleanup": {
+    "containers_removed": true,
+    "network_removed": true,
+    "loadgen_restored": true,
+    "check_images": "10/10 PASS",
+    "listeners_clear": true
+  },
+  "accounting": {
+    "accepted": 465,
+    "total": 1512,
+    "remaining": 1047,
+    "diagnostic_counted": false
+  }
+}

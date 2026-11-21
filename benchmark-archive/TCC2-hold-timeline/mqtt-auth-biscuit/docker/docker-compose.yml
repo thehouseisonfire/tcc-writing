@@ -1,0 +1,166 @@
+services:
+  mosquitto:
+    image: mosquitto:2.1.3-custom
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mosquitto.custom
+      args:
+        MOSQ_REF: ${MOSQ_REF:-b3b4d77ef3faef6dfcdfac3fb00a9b5a42859aca}
+    ports:
+      - "1883:1883"
+    volumes:
+      - ${MOSQUITTO_CONF:-./mosquitto.conf}:/mosquitto/config/mosquitto.conf
+      - ./jwt_public.pem:/mosquitto/config/jwt_public.pem:ro
+      - ./biscuit_public.key:/mosquitto/config/biscuit_public.key:ro
+      - ./static-acl.conf:/mosquitto/config/static-acl.conf
+      - ./dynamic-security.json:/mosquitto/config/dynamic-security.json
+      - ./dynamic-security-churn.json:/mosquitto/config/dynamic-security-churn.json
+      - ./sqlite:/mosquitto/config/sqlite
+    cpuset: "0-1"
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${MOSQUITTO_HEALTH_PORT:-1883}"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+      start_period: 1s
+    networks:
+      - mqtt-net
+
+  netem:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.netem
+    network_mode: "service:mosquitto"
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - NETEM_IFACE=${NETEM_IFACE:-eth0}
+      - NETEM_MTU=${NETEM_MTU:-}
+      - NETEM_DELAY_MS=${NETEM_DELAY_MS:-}
+      - NETEM_LOSS_PCT=${NETEM_LOSS_PCT:-}
+      - NETEM_RATE_KBIT=${NETEM_RATE_KBIT:-}
+      - NETEM_CLEAR=${NETEM_CLEAR:-0}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  metrics-collector:
+    image: prom/prometheus:v3.10.0@sha256:4a61322ac1103a0e3aea2a61ef1718422a48fa046441f299d71e660a3bc71ae9
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - mqtt-net
+
+  authz:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.authz
+    environment:
+      - AUTHZ_PORT=8081
+      - AUTHZ_DELAY_MS=0
+      - AUTHZ_FAIL_MODE=none
+      - AUTHZ_FAIL_RATE=0
+      - AUTHZ_PROFILE=custom
+    ports:
+      - "8081:8081"
+    networks:
+      - mqtt-net
+
+  token-issuer:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.token-issuer
+    environment:
+      - TOKEN_ISSUER_PORT=8082
+      # Benchmark-only defaults. Override keys + disable defaults in real deployments.
+      - TOKEN_ISSUER_ALLOW_DEFAULT_KEYS=1
+      - JWT_ALG=ES256
+      - JWT_EC_PRIVATE_KEY_HEX=0101010101010101010101010101010101010101010101010101010101010101
+      - BISCUIT_ROOT_PRIVATE_KEY_HEX=0000000000000000000000000000000000000000000000000000000000000000
+    ports:
+      - "8082:8082"
+    cpuset: "0-1"
+    mem_limit: 256m
+    networks:
+      - mqtt-net
+
+  loadgen:
+    build:
+      context: ../..
+      dockerfile: mqtt-auth-biscuit/docker/Dockerfile.loadgen
+    environment:
+      - MQTT_AUTH_BISCUIT_REPO_ROOT=/workspace
+      - LOADGEN_MTU=${LOADGEN_MTU:-}
+    volumes:
+      - ..:/workspace
+    cpuset: "${LOADGEN_CPUSET:-}"
+    cpus: "${LOADGEN_CPUS:-1.0}"
+    mem_limit: "${LOADGEN_MEMORY:-512m}"
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - mqtt-net
+
+  sync-barrier:
+    build:
+      context: ../..
+      dockerfile: mqtt-auth-biscuit/docker/Dockerfile.sync-barrier
+    profiles:
+      - sync-barrier
+    environment:
+      - SYNC_BARRIER_PORT=8083
+    ports:
+      - "8083:8083"
+    networks:
+      - mqtt-net
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.56.2@sha256:5534ae91cbf3428998d60428d107cfdd97272d80658534ac6e54d8ce3b0c4d72
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - mqtt-net
+
+  iperf3:
+    image: networkstatic/iperf3:latest@sha256:07dcca91c0e47d82d83d91de8c3d46b840eef4180499456b4fa8d6dadb46b6c8
+    command: ["-s", "-p", "5201"]
+    ports:
+      - "5201:5201"
+    networks:
+      - mqtt-net
+    cap_add:
+      - NET_ADMIN
+
+  tcpdump:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.tcpdump
+    network_mode: "service:mosquitto"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - TCPDUMP_IFACE=${TCPDUMP_IFACE:-eth0}
+      - TCPDUMP_FILTER=${TCPDUMP_FILTER:-port 1883 or port 8883}
+      - TCPDUMP_DURATION=${TCPDUMP_DURATION:-300}
+      - TCPDUMP_OUTPUT=${TCPDUMP_OUTPUT:-/pcap/capture.pcap}
+      - TCPDUMP_KEEP_ALIVE=${TCPDUMP_KEEP_ALIVE:-0}
+    volumes:
+      - ${TCPDUMP_OUTPUT_DIR:-./pcap}:/pcap
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    profiles:
+      - tcpdump
+
+networks:
+  mqtt-net:
+    driver: bridge
