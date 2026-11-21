@@ -16,11 +16,9 @@ Variar o tipo de token, a fonte de políticas (ACL estática, Dynamic Security, 
 
 O emissor define as permissões iniciais, o cliente apresenta o token e o módulo decide se o Mosquitto deve permitir a operação. O desenho prevê duas comparações: ambos os formatos como credenciais de identidade com uma fonte de políticas equivalente, e Biscuit com restrições no próprio token diante de um fluxo JWT configurado para consultar políticas externas.
 
-\section{Proposta de Solução}
+\section{Solução Implementada}
 
-Módulo em Rust integrado ao Mosquitto 2.0+ via FFI, com \texttt{cbindgen}, \texttt{jsonwebtoken} e \texttt{biscuit\_auth} \cite{rust_jsonwebtoken}. O cliente obterá o token de um emissor externo. A proposta prevê envio no campo \texttt{password} de \texttt{CONNECT}, validação com chave pública previamente configurada e renovação de credenciais por \texttt{AUTH} no MQTT 5.0.
-
-Avaliar a autorização na publicação e na inscrição. A proposta prevê reaproveitar o resultado da verificação criptográfica na sessão e avaliar as regras Datalog no contexto de cada operação. Considerar cache para regras estáticas, condicionado à viabilidade.
+A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo~\ref{chap:implementacao}.
 
 \section{Proposta de Ambiente}
 

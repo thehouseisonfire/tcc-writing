@@ -38,22 +38,9 @@ Devido às características arquiteturais de cada tecnologia, o fluxo de consult
 
 Para garantir a paridade dos testes e evitar vieses, os cenários comuns ao uso de JWT, em que o token desempenha apenas o papel de identificação e o PDP busca permissões detalhadas no momento do acesso, também serão replicados na arquitetura do Biscuit para fins de comparação direta.
 
-\section{Proposta de Solução}
+\section{Solução Implementada}
 
-A solução proposta consiste no desenvolvimento de um módulo de extensão para o Mosquitto, desenvolvido em Rust. A escolha justifica-se pelas garantias de segurança de memória e de desempenho do Rust, além da disponibilidade nativa da implementação de referência do Biscuit. O artefato final será uma biblioteca dinâmica (\emph{Shared Object} - \texttt{.so}) carregada em tempo de execução pelo Mosquitto.
-
-Utilizando a ferramenta \texttt{cbindgen}, serão gerados os cabeçalhos C (\texttt{.h}) que expõem as funções Rust para a API de plugins do Mosquitto (focada na versão 2.0+ e protocolo MQTT 5.0). As funções exportadas interceptarão eventos do \emph{broker}, especificamente: \texttt{MOSQ\_EVT\_BASIC\_AUTH} e \texttt{MOSQ\_EVT\_EXT\_AUTH} para autenticação; e \texttt{MOSQ\_EVT\_ACL\_CHECK}, \texttt{MOSQ\_EVT\_MESSAGE} e \texttt{MOSQ\_EVT\_CONTROL} para autorização de publicação, assinatura e controle.
-
-Para emissão e verificação, o módulo integrará as bibliotecas \texttt{jsonwebtoken} e \texttt{biscuit\_auth}. Por padrão, assume-se que os clientes requisitarão tokens a uma autoridade externa antes de contatar o \emph{broker}. O servidor terá a chave pública raiz configurada previamente \cite{rust_jsonwebtoken}.
-
-O fluxo de conexão seguirá as especificações do MQTT 5.0:
-\begin{enumerate}
-    \item Os clientes enviarão seus tokens através do campo \texttt{password} do pacote \texttt{CONNECT}. O limite de 65kB (definido pelo protocolo) é suficiente para acomodar ambos os tipos de token.
-    \item O \emph{broker} iniciará a sessão após validar a assinatura criptográfica.
-    \item Para gerenciar a expiração sem desconectar o cliente, será implementado um fluxo de reautenticação via pacotes \texttt{AUTH}. Ao expirar, o cliente requisitará um novo token e o enviará ao Mosquitto via outro pacote \texttt{AUTH}, permitindo a renovação transparente da sessão.
-\end{enumerate}
-
-Para a autorização contínua, a solução otimizará o desempenho do Biscuit, evitando a reverificação criptográfica completa a cada mensagem e realizando apenas a avaliação de políticas (Datalog). Se viável, será empregado \emph{caching} para regras estáticas, reavaliando apenas as regras contextuais a cada mensagem. O uso de pacotes \texttt{AUTH} também permitirá informar motivos específicos de rejeição, facilitando a depuração.
+A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo~\ref{chap:implementacao}.
 
 \section{Proposta de Ambiente}
 
@@ -94,6 +81,8 @@ O tratamento estatístico incluirá o cálculo da mediana, do desvio padrão e d
 A interpretação dos dados focará na validação de $\mathbf{H}_2$ e $\mathbf{H}_3$, quantificando se o custo computacional adicional (CPU/Memória) do Biscuit é compensado pela economia de recursos de rede (latência/banda) em comparação à introspecção e tráfego externo exigidos por arquiteturas JWT complexas.
 
 Por fim, métricas de engenharia de software, como linhas de código e complexidade ciclomática, serão utilizadas para discutir a ergonomia da solução, complementando a validação de $\mathbf{H}_1$ (viabilidade funcional) demonstrada pela execução bem-sucedida dos cenários de teste.
+
+\input{capitulos/capitulo_4}
 
 \chapter{Trabalhos Futuros}
 

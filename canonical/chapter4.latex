@@ -1,0 +1,26 @@
+\chapter{Implementação}
+\label{chap:implementacao}
+
+\section{Integração com o Mosquitto}
+
+O módulo de extensão foi desenvolvido em Rust e compilado como uma biblioteca dinâmica (\texttt{.so}), que o Mosquitto carrega ao iniciar. A comunicação com o \emph{broker}, implementado em C, utiliza a versão 5 da API de módulos do Mosquitto \cite{eclipse_mosquitto_plugin}.
+
+A FFI entre as linguagens foi implementada no próprio código Rust, com as funções exportadas seguindo a convenção de chamada do C e as estruturas dos eventos reproduzindo a organização dos campos definida nos cabeçalhos providenciados pelo Mosquitto. Durante a inicialização, o módulo consulta a configuração, carrega as chaves públicas dos tokens, e registra as funções de (\emph{callback}). Essas funções recebem os eventos do \emph{broker} e encaminham os dados para a lógica de autenticação ou autorização.
+
+A verificação das ACLs distingue as três operações comuns do fluxo de mensagens: A publicação, que é verificada sobre o tópico final, a inscrição, sobre o filtro que foi solicitado, e a leitura, no momento em que o \emph{broker} entrega uma mensagem a um assinante. Essa última verificação é o que nos permite aplicar mudanças na política aos clientes já inscritos. Nos cenários configurados para a verificação real dessa operação, o módulo reconsulta a política antes de cada entrega, já no modo simplificado, verifica apenas a validade da credencial, já que pode estar expirada. Mensagem indo para tópicos de controle têm uma verificação separada.
+
+\section{Autenticação e Ciclo de Vida da Credencial}
+
+A emissão dos tokens é realizada por um teceiro serviço, por onde o cliente deve requisitá-lo antes de se conectar com o \emph{broker}. Após obtér o token, o cliente o envia no campo \texttt{password} do pacote \texttt{CONNECT}, com cada token sendo enviado em seu formato nativo: Base64URL para o JWT, protobuf para o Biscuit. Como o Biscuit pode conter bytes nulos, o módulo utiliza o comprimento fornecido no evento de autenticação para ler a credencial inteira. Por esse motivo, a versão do Mosquitto utilizada no experimento provêm de um \emph{commit}, e não de uma versão publicada.
+
+Para a validação dos token, a biblioteca \texttt{jsonwebtoken} valida a assinatura e a expiração do JWT enquanto a \texttt{biscuit\_auth} verifica a cadeia de assinaturas a partir da chave pública raiz do Biscuit. Caso haja fatos \texttt{expires\_at}, o módulo considera o prazo mais curto que foi encontrado. A configuração também permite exigir que a identidade registrada no token corresponda ao identificador do cliente, uma opção importante, pois permite fluxos de autentificação em contraste com fluxos de posse do token, que por natureza somente avaliam regras autorização \cite{rust_jsonwebtoken,biscuit_spec}.
+
+Após a autenticação, o módulo guarda as declarações do JWT ou o objeto Biscuit já verificado em um \emph{cache}, para possibilitar o reaproveitamento da verificação criptográfica em futuras operações. Quando uma verificação de ACL encontra uma credencial expirada nesse \emph{cache}, o módulo nega a operação e solicita a desconexão do cliente. Como utilizamos o MQTT 5.0, o cliente pode renovar a credencial antes de expiração, apresentando o novo token nos dados de autenticação do pacote \texttt{AUTH}. Se a validação for bem-sucedida, o módulo substitui a credencial associada à conexão. Essa operação precisa ser iniciada pelo cliente, pois o protocolo não permite o \emph{broker} de iniciar um fluxo com o pacote \texttt{AUTH}.
+
+\section{Avaliação das Políticas de Acesso}
+
+No modo de autorização local pelo token, o módulo procura uma permissão para a operação e o tópico. No caso do JWT, as declarações \texttt{grants} e \texttt{denies} registram as permissões e as proibições. Já com o Biscuit, o autorizador avalia as verificações em Datalog com o tópico, operação, e horário, com o módulo em seguida examinando os fatos de permissão e proibição obtidos da avaliação. Ambos os formatos utilizam a mesma lógica de correspondência de filtros MQTT, incluindo os curingas \texttt{+} e \texttt{\#}. Proibições tem precedência sobre permissões, e a ausência de uma permissão resulta em uma recusa.
+
+Além da avaliação local pelo token, o módulo oferece integração com as ACLs estáticas do Mosquitto, com uma configuração do módulo de \emph{Dynamic Security}, com políticas \emph{role based} em SQLite, e com um servidor de autorização externo, via HTTP. Em tais casos, o módulo pode usar identificador, ou um papel extraído do token para definir a politíca de regras.
+
+Já com o modo híbrido, o módulo consulta o serviço HTTP e recorre à política de autorização token somente se a consulta falhar. Dessa forma, ambos os formatos podem ser avaliados com políticas locais ou externas, e o custo dessa consulta HTTP depende da configuração e do estado do servidor, algo que exploramos em diversos cenários.
