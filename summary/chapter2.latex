@@ -6,7 +6,7 @@ Para os cenários comparativos, o Mosquitto oferece ACLs estáticas e ACLs geren
 
 \section{Comparação entre JWT e Biscuit}
 
-Na comparação proposta, importa onde a política é avaliada. Um JWT pode ser validado localmente; o acesso a uma fonte externa de políticas depende da arquitetura adotada. O Biscuit permite anexar restrições ao token sem solicitar uma nova emissão. Nos testes, a quantidade de blocos de atenuação e a complexidade das verificações em Datalog são parâmetros para avaliar o custo da verificação local \cite{rfc7519,biscuit_spec,biscuit_cryptography}.
+Na comparação realizada, importa onde a política é avaliada. Um JWT pode ser validado localmente; o acesso a uma fonte externa de políticas depende da arquitetura adotada. O Biscuit permite anexar restrições ao token sem solicitar uma nova emissão. Nos testes, a quantidade de blocos de atenuação e a complexidade das verificações em Datalog são parâmetros para avaliar o custo da verificação local \cite{rfc7519,biscuit_spec,biscuit_cryptography}.
 
 \chapter{Trabalhos Relacionados}
 

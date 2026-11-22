@@ -7,4 +7,4 @@
 - [x] **Methodology** — Update to reflect what was actually implemented and tested.
 - [x] **Abstract** — Rewrite to include actual results and conclusions.
 - [x] **Future Work** — Adjust based on experimental findings.
-- **Final Review** — Verify citations, technical accuracy, LaTeX formatting, and institutional requirements.
+- **Final Review** — Confirm the TCC II approval details, insert the official catalog record, and verify the submission PDF.

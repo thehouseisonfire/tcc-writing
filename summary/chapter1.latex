@@ -7,14 +7,14 @@ O trabalho investiga a viabilidade do Biscuit para autenticação e autorizaçã
 
 \section{Objetivo Geral}
 
-Desenvolver e avaliar um módulo de extensão para o \emph{broker} Mosquitto que suporte nativamente o token Biscuit e o token JWT, analisando comparativamente o desempenho, segurança e ergonomia entre os padrões em redes MQTT.
+Desenvolver e avaliar um módulo de extensão para o \emph{broker} Mosquitto que suporte nativamente o token Biscuit e o token JWT, comparando o desempenho dos formatos e verificando as decisões de acesso nos fluxos testados em redes MQTT.
 
 \section{Objetivos Específicos}
 
 \begin{itemize}
     \item Projetar a arquitetura de um módulo de extensão de autenticação e autorização para o Mosquitto, definindo a interação via \emph{Foreign Function Interface} (FFI) entre a base em C do \emph{broker} e a lógica de segurança em Rust.
-    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, em paralelo a um fluxo de controle equivalente via JWT.
-    \item Estabelecer uma suíte de testes reprodutíveis que simulem padrões reais de uso do MQTT, isolando métricas críticas como latência de conexão, vazão de mensagens, consumo de recursos, e tamanho dos tokens.
-    \item Executar experimentos comparativos em ambiente virtualizado, variando a carga de clientes e a complexidade das políticas de acesso para estressar os mecanismos de verificação.
-    \item Analisar os resultados quantitativos para validar a viabilidade do Biscuit em redes MQTT, propondo um guia de boas práticas para a adoção de modelos de autorização descentralizados neste ecossistema.
+    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, com suporte a JWT para comparar os fluxos comuns aos dois formatos.
+    \item Estabelecer uma suíte de testes reprodutíveis que simulem padrões reais de uso do MQTT, medindo a latência de conexão, a vazão de mensagens, o consumo de recursos e o tamanho das credenciais.
+    \item Executar experimentos comparativos em ambiente conteinerizado, variando a carga de clientes e a complexidade das políticas de acesso para estressar os mecanismos de verificação.
+    \item Analisar os resultados quantitativos para avaliar a viabilidade do Biscuit nos cenários testados, propondo orientações para a adoção de modelos de autorização descentralizados neste ecossistema.
 \end{itemize}

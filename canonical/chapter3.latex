@@ -2,25 +2,25 @@
 
 \section{Abordagem}
 
-Esta pesquisa adota uma abordagem predominantemente quantitativa, complementada por documentação qualitativa sobre aspectos de engenharia de software envolvidos no desenvolvimento da solução. Para a avaliação experimental, definem-se três hipóteses principais:
+A avaliação foi predominantemente quantitativa, com apoio da documentação das decisões de implementação. Para conduzir os experimentos, formulamos três hipóteses:
 
 \begin{itemize}
-  \item $\mathbf{H}_1$: O uso do token Biscuit é funcionalmente viável no ecossistema MQTT, cobrindo a totalidade dos casos de uso de autenticação e autorização que o JWT pode apoiar no broker Mosquitto.
-  \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários onde ambos possuem apoio nativo à funcionalidade (e.g., autenticação de identidade e verificações de integridade).
-  \item $\mathbf{H}_3$: Em cenários de autorização complexos, em que a arquitetura baseada em JWT exige introspecção externa ou consulta a sistemas adicionais, o Biscuit demonstra desempenho superior em termos de latência e vazão.
+  \item $\mathbf{H}_1$: O Biscuit é funcionalmente viável no Mosquitto e cobre todos os casos de autenticação e autorização que o JWT pode atender nesse \emph{broker}.
+  \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários nos quais ambos oferecem a mesma funcionalidade, como a autenticação de clientes e a verificação de integridade da credencial.
+  \item $\mathbf{H}_3$: Em cenários de autorização complexos, quando o arranjo com JWT consulta um serviço externo a cada operação, a avaliação local com Biscuit apresenta menor latência e maior vazão.
 \end{itemize}
 
 Entre as variáveis independentes, a primária foi o \textbf{tipo de token}, cruzado com diferentes fontes de políticas, entre elas as permissões no próprio token, as ACLs estáticas nativas do Mosquitto, as ACLs dinâmicas do módulo \emph{Dynamic Security}, o banco de dados local em SQLite e o serviço externo de autorização via HTTP. A campanha também incluiu cenários em modo híbrido.
 
 Adicionalmente, houve variação nos parâmetros do protocolo MQTT, especificamente nos níveis de Qualidade de Serviço (QoS), na carga imposta ao sistema (número de conexões simultâneas e de mensagens por cliente) e na complexidade das políticas de acesso (de regras simples a condicionais baseadas em tempo e em atributos).
 
-As variáveis dependentes concentram-se em métricas de desempenho. Medimos as latências de conexão, publicação e entrega ao assinante, a vazão de publicação e de recepção, em mensagens por segundo, e o consumo de CPU e memória do \emph{broker}. Registramos também o tamanho das credenciais em bytes e, nos cenários correspondentes, o tempo até a resposta dos comandos administrativos e o número de consultas HTTP.
+As variáveis dependentes concentram-se em métricas de desempenho. Medimos as latências de conexão, publicação e entrega ao assinante, a vazão de publicação e de recepção, em mensagens por segundo, e o consumo de CPU e memória do \emph{broker}. Nos testes de MTU, também medimos o tamanho das credenciais em bytes no tráfego sem TLS. Conforme o cenário, registramos o tempo até a resposta dos comandos administrativos e o número de consultas HTTP.
 
 Como variáveis de controle, mantivemos a mesma máquina hospedeira e as mesmas imagens dos serviços ao longo da campanha. Nas comparações diretas entre os formatos, mantivemos também a topologia dos clientes.
 
 \subsection{Entidades e Fluxos}
 
-O experimento envolve cinco entidades lógicas distintas:
+O ambiente experimental reuniu cinco entidades lógicas distintas:
 
 \begin{itemize}
   \item \textbf{Emissor de Tokens:} Entidade detentora das chaves privadas, responsável pela emissão de tokens contendo credenciais e permissões iniciais.
@@ -36,7 +36,7 @@ O fluxo de consulta ao PIP variou conforme a fonte de políticas configurada em 
 
 \textbf{Fluxo JWT:} Nos cenários com autorização externa, o JWT carrega a identidade ou o papel do cliente, e o PDP consulta a fonte de políticas no momento da operação para decidir se o acesso deve ser permitido. Nos cenários com autorização local, o PDP verifica as permissões carregadas no próprio JWT.
 
-Para garantir a paridade dos testes e evitar vieses, os cenários selecionados em que o JWT identifica o cliente ou informa seu papel e o PDP busca as permissões detalhadas no momento do acesso, também foram executados com Biscuit sob a mesma fonte de políticas, para fins de comparação direta. Nas variantes com vínculo de identidade, exigimos que a identidade registrada no token correspondesse ao identificador MQTT do cliente.
+Para comparar os formatos sob a mesma fonte de políticas, também executamos com Biscuit os cenários selecionados em que o JWT identificava o cliente ou informava seu papel e as permissões eram consultadas no momento do acesso. Nas variantes com vínculo de identidade, exigimos que a identidade registrada no token correspondesse ao identificador MQTT do cliente.
 
 \section{Solução Implementada}
 
@@ -50,13 +50,13 @@ Um programa em Python orquestrou os testes com o \texttt{mqtt-loadgen}, implemen
 
 \section{Cenários de Teste}
 
-Estabelecemos casos-base para obter referências de latência e vazão do ambiente, com cenários sem autenticação, com o módulo \emph{Dynamic Security} e com permissões de publicação e inscrição no próprio token. Esses casos tiveram variantes com e sem TLS.
+Estabelecemos casos-base para obter referências de latência e vazão do ambiente, com cenários sem autenticação, com o módulo \emph{Dynamic Security} e com permissões de publicação e inscrição no próprio token. Esses casos tiveram variantes com e sem TLS. Os ensaios com TLS mediram o desempenho da comunicação protegida. A campanha não incluiu testes específicos de validação de certificados.
 
 Na matriz geral, executamos cargas de 10 e 100 mensagens por cliente com 10 e 50 clientes, além de cargas de 10 mensagens por cliente com 200 clientes. Utilizamos QoS 0, 1 e 2, com níveis fixos ou combinados conforme o cenário. Os testes que dependiam de uma sequência própria de operações, como a revogação durante a entrega de mensagens, utilizaram cargas fixas. Cada condição prevista no cronograma foi repetida em três rodadas.
 
-\textbf{Fragmentação e MTU (\emph{Maximum Transmission Unit}):} Capturamos o tráfego com \texttt{tcpdump} para examinar a segmentação TCP e a fragmentação IP, relacionando-as ao tamanho das credenciais. Mais especificamente, comparamos o JWT e o Biscuit com 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS. Nos cenários sem TLS, utilizamos o TShark para identificar e contar os segmentos TCP que transportaram cada pacote \texttt{CONNECT}.
+\textbf{Fragmentação e MTU:} Capturamos o tráfego com \texttt{tcpdump} para examinar a segmentação TCP e a fragmentação IP, relacionando-as ao tamanho das credenciais. Mais especificamente, comparamos o JWT e o Biscuit com 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS. Nos cenários sem TLS, utilizamos o TShark para identificar e contar os segmentos TCP que transportaram cada pacote \texttt{CONNECT}.
 
-\textbf{Problema da Manada (\emph{Thundering Herd}):} Simulação da reinicialização do \emph{broker} com a reconexão simultânea de um grande número de clientes. Sincronizamos o início das conexões por meio de uma barreira para concentrar as solicitações de autenticação em um intervalo curto. Já nos cenários de reconexão, os clientes passaram por ciclos de desconexão, nova conexão e publicação, incluindo variantes em que solicitavam credenciais novas ao emissor.
+\textbf{Conexão simultânea e reconexão:} Sincronizamos o início das conexões por meio de uma barreira para concentrar as solicitações de autenticação em um intervalo curto. Já nos cenários de reconexão, os clientes passaram por ciclos de desconexão, nova conexão e publicação, incluindo variantes em que solicitavam credenciais novas ao emissor.
 
 \textbf{Complexidade de Políticas:} Variamos o comprimento da cadeia Biscuit entre 1, 5 e 25 blocos, mantendo as regras, e utilizamos outra série de cenários para variar as verificações em Datalog, incluindo condições de tempo. Para a autorização externa, utilizamos perfis com diferentes conjuntos de regras, e registramos, junto à carga de publicação, a quantidade de consultas e o trabalho de avaliação que o serviço informou.
 
@@ -90,7 +90,7 @@ Os ensaios com atraso de 200 ms permitem comparar JWT e Biscuit com e sem TLS. A
 
 As capturas com JWT a 200 e 9.000 bytes podem orientar os ensaios de MTU com Biscuit, nos quais se observaria a segmentação do \texttt{CONNECT} e o tempo de conexão. Para testar 9.000 bytes, é preciso verificar se todas as interfaces entre o cliente e o \emph{broker} suportam essa MTU.
 
-A transposição dos testes do ambiente virtualizado para dispositivos de hardware real pode revelar gargalos de processamento e nuances de hardware que não são observáveis na virtualização. Fundamentalmente, isso possibilitaria a avaliação precisa do consumo energético comparativo entre as soluções de token, uma métrica crítica para dispositivos operados a bateria.
+A repetição dos testes em dispositivos embarcados pode revelar gargalos de processamento que não aparecem no ambiente conteinerizado da campanha. Fundamentalmente, isso possibilitaria a avaliação precisa do consumo energético comparativo entre as soluções de token, uma métrica crítica para dispositivos operados a bateria.
 
 Além do Biscuit, existem outros tokens emergentes com arquiteturas promissoras, como Macaroons e PASETO. Expandir a avaliação comparativa para incluir essas tecnologias ofereceria uma visão mais abrangente das alternativas modernas ao JWT.
 

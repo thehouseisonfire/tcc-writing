@@ -63,7 +63,7 @@
 \usepackage{algorithmic}
 \usepackage[portuguese,algo2e,boxruled]{algorithm2e}
 % Hyperlink em capitulos, seções, citações
-\usepackage[hidelinks]{hyperref}	
+\usepackage[hidelinks,hypertexnames=false]{hyperref}
 % Bibliografia e citações padrão ABNT
 %https://mirrors.ibiblio.org/CTAN/macros/latex/contrib/abntex2/doc/abntex2cite-alf.pdf
 % Comandos: \citeonline{ref} \citeauthor{ref} \citeyear{ref}
@@ -103,8 +103,7 @@
 %----------------------------------------------------------------
 % Opções para o tipo de trabalho (OBRIGATÓRIO)
 %----------------------------------------------------------------
-\tipotrabalho{\tci}         % Trabalho de Conclusão I
-%\tipotrabalho{\tcii}        % Trabalho de Conclusão II
+\tipotrabalho{\tcii}        % Trabalho de Conclusão II
 
 %----------------------------------------------------------------
 % Seleção do curso ("este trabalho é um requisito parcial para
@@ -124,8 +123,8 @@
 % Informar pelo menos 1 e no máximo 5 palavras chaves e Keywords,
 %  separadas por virgula.
 %----------------------------------------------------------------
-\palavraschave{MQTT, Biscuit, JWT, Segurança, Comparativa}
-              {MQTT, Biscuit, JWT, Security, Benchmark}
+\palavraschave{MQTT, Biscuit, JWT, Segurança, Avaliação de desempenho}
+              {MQTT, Biscuit, JWT, Security, Performance evaluation}
 
 %----------------------------------------------------------------
 % A capa é inserida automaticamente. Por isso não é necessário
@@ -138,7 +137,7 @@
 %  Você pode gerar a ficha neste link também: 
 %   https://ficha.uffs.edu.br/
 %----------------------------------------------------------------
-\fichacatalografica
+\fichacatalografica % Substituir pela ficha oficial da versão final.
 
 %----------------------------------------------------------------
 % Folha de aprovação (OBRIGATÓRIO para TCC II)
@@ -146,7 +145,7 @@
 %   Demais parâmetros são os membros da banca (pelo menos 2 nomes)
 %   Não precisa passar o nome do Orientador
 %----------------------------------------------------------------
-\folhadeaprovacao{11/12/2025}{Andrei de Almeida Sampaio Braga - UFFS}{Samuel da Silva Feitosa - UFFS}{}
+% Inserir a folha de aprovação com a data e a banca confirmadas do TCC II.
 
 %----------------------------------------------------------------
 % Depois da folha de aprovação vem a dedicatória e a epígrafe.

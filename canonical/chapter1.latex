@@ -22,32 +22,32 @@
 
 O crescimento exponencial da \emph{Internet of Things} (IoT) consolidou o protocolo MQTT como padrão de fato na indústria, impulsionado por sua leveza e eficiência em redes limitadas e instáveis. Com a expansão deste ecossistema para infraestruturas críticas, a segurança tornou-se um requisito não funcional prioritário, exigindo mecanismos de autenticação e autorização que equilibrem proteção robusta com a escassez de recursos típica de dispositivos embarcados.
 
-Atualmente, o padrão dominante de controle de acesso nessas arquiteturas baseia-se em JSON Web Tokens (JWT). Esta tecnologia oferece um modelo comprovado de autenticação \emph{stateless}, permitindo que \emph{brokers} validem credenciais sem manter sessões persistentes. No entanto, à medida que as redes IoT evoluem para topologias mais complexas e descentralizadas, e as regras de autorização crescem em escopo e nível de detalhe, surgem desafios relacionados à dependência de serviços externos para a resolução de políticas, o que pode introduzir latência indesejada e pontos de falha. 
+O JSON Web Token (JWT) permite que o \emph{broker} valide a credencial localmente, desde que disponha da chave e das informações necessárias para verificá-la. O \emph{broker} continua responsável pelo estado das sessões MQTT e, nas arquiteturas em que as permissões são consultadas em um serviço externo, o tempo de resposta e a disponibilidade desse serviço também afetam a autorização.
 
 \section{Problema}
 
-Embora o uso de JWT seja predominante devido ao seu baixo custo computacional e à ampla compatibilidade, ele apresenta limitações arquiteturais significativas em cenários de autorização avançados. A rigidez do formato dificulta a delegação de permissões sem a intervenção constante de um servidor de autorização, criando uma dependência excessiva de uma conectividade estável, o que é especialmente indesejável no contexto da IoT.
+O JWT pode carregar permissões para avaliação local, como ocorre em alguns dos testes deste trabalho. Entretanto, as declarações de um JWT assinado ficam definidas na emissão, de modo que o portador não pode acrescentar restrições ao próprio token sem invalidar sua assinatura. Em aplicações que precisam delegar permissões sem contato com o emissor, essa limitação exige um mecanismo adicional.
 
-O token Biscuit surge como uma alternativa moderna, prometendo resolver essas lacunas por meio de uma linguagem lógica declarativa (Datalog) e de uma arquitetura de encadeamento de assinaturas que permite a atenuação de direitos de forma offline. Entretanto, essa complexidade levanta uma questão crítica de viabilidade técnica, em especial sobre o custo computacional que pode acarretar.
+O Biscuit oferece uma alternativa por meio de uma linguagem lógica declarativa (Datalog) e de uma cadeia de assinaturas que permite ao portador acrescentar restrições sem consultar o emissor. Entretanto, essa complexidade levanta uma questão crítica de viabilidade técnica, em especial sobre o custo computacional que pode acarretar.
 
-A literatura técnica atual carece de dados empíricos que quantifiquem se os benefícios de autonomia do Biscuit justificam seu impacto no consumo de CPU, memória e latência em comparação ao padrão JWT, ou mesmo de uma demonstração técnica que comprove sua funcionalidade no contexto MQTT.
+Nos trabalhos consultados, não encontramos uma comparação experimental entre Biscuit e JWT no Mosquitto que medisse latência, vazão e consumo de recursos. Investigamos, portanto, a viabilidade do Biscuit nesse ambiente e o custo de avaliar as permissões localmente ou consultar uma fonte externa.
 
 \section{Objetivo Geral}
 
-Desenvolver e avaliar um módulo de extensão para o \emph{broker} Mosquitto que suporte nativamente o token Biscuit e o token JWT, analisando comparativamente o desempenho, segurança e ergonomia entre os padrões em redes MQTT.
+Desenvolver e avaliar um módulo de extensão para o \emph{broker} Mosquitto que suporte nativamente o token Biscuit e o token JWT, comparando o desempenho dos formatos e verificando as decisões de acesso nos fluxos testados em redes MQTT.
 
 \section{Objetivos Específicos}
 
 \begin{itemize}
     \item Projetar a arquitetura de um módulo de extensão de autenticação e autorização para o Mosquitto, definindo a interação via \emph{Foreign Function Interface} (FFI) entre a base em C do \emph{broker} e a lógica de segurança em Rust.
-    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, em paralelo a um fluxo de controle equivalente via JWT.
-    \item Estabelecer uma suíte de testes reprodutíveis que simulem padrões reais de uso do MQTT, isolando métricas críticas como latência de conexão, vazão de mensagens, consumo de recursos, e tamanho dos tokens.
-    \item Executar experimentos comparativos em ambiente virtualizado, variando a carga de clientes e a complexidade das políticas de acesso para estressar os mecanismos de verificação.
-    \item Analisar os resultados quantitativos para validar a viabilidade do Biscuit em redes MQTT, propondo um guia de boas práticas para a adoção de modelos de autorização descentralizados neste ecossistema.
+    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, e oferecer suporte a JWT para comparar os fluxos de autenticação e autorização comuns aos dois formatos.
+    \item Estabelecer uma suíte de testes reprodutíveis que simulem padrões reais de uso do MQTT, medindo a latência de conexão, a vazão de mensagens, o consumo de recursos e o tamanho das credenciais.
+    \item Executar experimentos comparativos em ambiente conteinerizado, variando a carga de clientes e a complexidade das políticas de acesso para estressar os mecanismos de verificação.
+    \item Analisar os resultados quantitativos para avaliar a viabilidade do Biscuit nos cenários testados, propondo orientações para a adoção de modelos de autorização descentralizados neste ecossistema.
 \end{itemize}
 
 \section{Justificativa}
 
-A investigação de alternativas ao JWT é crucial para o amadurecimento da segurança em IoT. Do ponto de vista arquitetural, a capacidade de atenuar permissões sem comunicação constante com um servidor externo aumenta drasticamente a resiliência da rede, mitigando riscos de sobrecarga e permitindo operação contínua em cenários de conectividade intermitente.
+A possibilidade de atenuar uma credencial sem consultar o emissor é relevante em aplicações IoT com conectividade intermitente, nas quais um dispositivo pode precisar repassar parte de suas permissões a outro. O protótipo permite examinar essa forma de delegação e medir os custos de seu uso no Mosquitto.
 
-Academicamente, este trabalho preenche uma lacuna na literatura sobre sistemas distribuídos ao fornecer uma análise de custo-benefício de uma nova arquitetura de token para o protocolo MQTT. Na prática, a disponibilização de um módulo de código aberto para o Mosquitto contribui para o ecossistema do Mosquitto, oferecendo uma ferramenta concreta para engenheiros que buscam implementar modelos de segurança e autorização descentralizada, modernizando a pilha tecnológica do \emph{broker}.
+A comparação fornece dados para avaliar em que condições a autorização local pode ser vantajosa e quais custos a avaliação de regras mais complexas acrescenta. Na prática, o módulo e a suíte de testes oferecem uma base para reproduzir os experimentos e investigar outras configurações de autorização no \emph{broker}.
