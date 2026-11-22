@@ -29,10 +29,10 @@ O Docker Compose reuniu o Mosquitto e os serviços auxiliares. As cargas foram e
 A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 clientes, e 10 mensagens por cliente para cargas de 200 clientes, em três rodadas. Utilizamos casos-base sem autenticação, com o módulo \emph{Dynamic Security} e com autorização pelo próprio token.
 
 \begin{itemize}
-  \item \textbf{MTU:} Avaliamos o efeito do tamanho do token com MTUs de 200, 500, 1500 e 9000~bytes nas combinações previstas para cada tamanho.
+  \item \textbf{MTU:} Comparamos JWT e Biscuit de 25 blocos sob MTUs de 500 e 1.500~bytes, com e sem TLS, na Parte~1.
   \item \textbf{Conexão simultânea e reconexão:} Sincronizamos o início das conexões e exercitamos, em cenários próprios, ciclos de reconexão.
   \item \textbf{Complexidade das políticas:} Variamos o Biscuit entre 1, 5 e 25 blocos com as mesmas regras, e, em outra série, variamos as verificações em Datalog. Também testamos perfis de regras HTTP.
-  \item \textbf{Latência externa:} Introduzimos atrasos de 200~ms e 1~s no serviço de autorização, conforme o cenário.
+  \item \textbf{Latência externa:} Introduzimos um atraso de 200~ms no serviço de autorização para JWT e Biscuit na Parte~1, com e sem TLS.
   \item \textbf{Arquitetura híbrida:} Testamos a entrega a múltiplos assinantes com políticas HTTP e híbridas.
   \item \textbf{Revogação:} Alteramos permissões durante o tráfego e, nos testes de ciclo de vida, exercitamos a renovação por \texttt{AUTH}.
   \item \textbf{Delegação:} Um cliente derivou um Biscuit com permissões limitadas e o transferiu para outro cliente publicar \cite{identity_management_for_agents}.
@@ -40,7 +40,7 @@ A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 cli
 
 \section{Coleta e Análise de Dados}
 
-O gerador de carga registrou as medições do cliente, o módulo forneceu contadores de autenticação e autorização, e o Prometheus coletou amostras de CPU e memória do cAdvisor \cite{prometheus}. Os testes de MTU incluíram capturas com \texttt{tcpdump}. Após uma correção na contagem de sessões TCP, as 189 capturas aceitas foram revalidadas com os mesmos intervalos de medição e critérios de aceitação.
+O gerador de carga registrou as medições do cliente, o módulo forneceu contadores de autenticação e autorização, e o Prometheus coletou amostras de CPU e memória do cAdvisor \cite{prometheus}. Os testes de MTU incluíram capturas com \texttt{tcpdump}. Com o TShark, remontamos os pacotes \texttt{CONNECT} sem TLS e medimos os bytes do campo \texttt{password} e os segmentos TCP por pacote MQTT. Após uma correção na contagem de sessões TCP, a auditoria revalidou as capturas aceitas da campanha com os mesmos intervalos de medição e critérios de aceitação.
 
 O índice da auditoria vincula cada resultado aceito à configuração e à rodada. Os testes funcionais fornecem a evidência para a $\mathbf{H}_1$, as operações correspondentes para JWT e Biscuit fornecem os dados para a $\mathbf{H}_2$, e a comparação entre autorização local e externa fornece os dados para a $\mathbf{H}_3$.
 
