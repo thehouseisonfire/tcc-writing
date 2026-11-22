@@ -6,5 +6,5 @@
 - [x] **Conclusion** — Summarize findings, contributions, and limitations.
 - [x] **Methodology** — Update to reflect what was actually implemented and tested.
 - **Abstract** — Rewrite to include actual results and conclusions.
-- **Future Work** — Adjust based on experimental findings.
+- [x] **Future Work** — Adjust based on experimental findings.
 - **Final Review** — Verify citations, technical accuracy, LaTeX formatting, and institutional requirements.

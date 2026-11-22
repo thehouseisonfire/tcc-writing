@@ -84,7 +84,11 @@ Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de
 
 \chapter{Trabalhos Futuros}
 
-Este trabalho abre diversas frentes para pesquisas subsequentes.
+Como a campanha injetou falhas parciais e totais do serviço HTTP apenas com JWT, seria útil repetir esses ensaios com Biscuit, sob as mesmas cargas e condições de falha, para verificar quais operações permanecem autorizadas quando o módulo recorre à política do token.
+
+Os ensaios com atraso de 200 ms permitem comparar JWT e Biscuit com e sem TLS. A partir desses dados, seria possível estudar o efeito do atraso sobre a latência de publicação e a vazão, estendendo a comparação a 1 segundo, condição para a qual a campanha reuniu dados apenas com JWT.
+
+As capturas com JWT a 200 e 9.000 bytes podem orientar os ensaios de MTU com Biscuit, nos quais se observaria a segmentação do \texttt{CONNECT} e o tempo de conexão. Para testar 9.000 bytes, é preciso verificar se todas as interfaces entre o cliente e o \emph{broker} suportam essa MTU.
 
 A transposição dos testes do ambiente virtualizado para dispositivos de hardware real pode revelar gargalos de processamento e nuances de hardware que não são observáveis na virtualização. Fundamentalmente, isso possibilitaria a avaliação precisa do consumo energético comparativo entre as soluções de token, uma métrica crítica para dispositivos operados a bateria.
 

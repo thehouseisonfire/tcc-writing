@@ -46,4 +46,6 @@ O índice da auditoria vincula cada resultado aceito à configuração e à roda
 
 \chapter{Trabalhos Futuros}
 
-Repetir os experimentos em dispositivos físicos e medir consumo energético; incluir Macaroons e PASETO na comparação; portar a integração para EMQX, VerneMQ ou NanoMQ; e realizar uma avaliação formal de segurança do módulo.
+Comparar JWT e Biscuit sob as mesmas falhas parciais e totais do serviço HTTP, analisar os ensaios com atraso de 200 ms e ampliar a comparação para 1 segundo. Estender os testes de MTU a 200 e 9.000 bytes, verificando a configuração de toda a rede no segundo caso.
+
+Repetir os experimentos em dispositivos físicos para medir o consumo energético, incluir Macaroons e PASETO na comparação, portar a integração para EMQX, VerneMQ ou NanoMQ e realizar uma avaliação formal de segurança do módulo.
