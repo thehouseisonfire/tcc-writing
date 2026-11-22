@@ -5,6 +5,6 @@
 - [x] **Results & Discussion** — Present results, compare JWT vs. Biscuit, and evaluate H1–H3.
 - [x] **Conclusion** — Summarize findings, contributions, and limitations.
 - [x] **Methodology** — Update to reflect what was actually implemented and tested.
-- **Abstract** — Rewrite to include actual results and conclusions.
+- [x] **Abstract** — Rewrite to include actual results and conclusions.
 - [x] **Future Work** — Adjust based on experimental findings.
 - **Final Review** — Verify citations, technical accuracy, LaTeX formatting, and institutional requirements.
