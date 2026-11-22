@@ -40,7 +40,7 @@ Para garantir a paridade dos testes e evitar vieses, os cenários selecionados e
 
 \section{Solução Implementada}
 
-A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo\ref{chap:implementacao}.
+A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo \ref{chap:implementacao}.
 
 \section{Ambiente Experimental}
 
@@ -60,7 +60,7 @@ Na matriz geral, executamos cargas de 10 e 100 mensagens por cliente com 10 e 50
 
 \textbf{Complexidade de Políticas:} Variamos o comprimento da cadeia Biscuit entre 1, 5 e 25 blocos, mantendo as regras, e utilizamos outra série de cenários para variar as verificações em Datalog, incluindo condições de tempo. Para a autorização externa, utilizamos perfis com diferentes conjuntos de regras, e registramos, junto à carga de publicação, a quantidade de consultas e o trabalho de avaliação que o serviço informou.
 
-\textbf{Latência Externa:} Na Parte~1, introduzimos um atraso de 200~ms no serviço de autorização em cenários com os dois formatos, com e sem TLS, para observar o efeito do atraso na latência e na vazão das publicações.
+\textbf{Latência Externa:} Introduzimos um atraso de 200 ms no serviço de autorização em cenários com os dois formatos, com e sem TLS, para observar o efeito do atraso na latência e na vazão das publicações.
 
 \textbf{Arquitetura Híbrida:} Executamos cargas de entrega a múltiplos assinantes com políticas HTTP e híbridas.
 
@@ -78,7 +78,7 @@ Preservamos os resultados por cenário em JSON e os resumos de cada lote em JSON
 
 Como padrão, o tratamento estatístico incluiu o cálculo, pelo gerador de carga, da mediana ($p50$) e dos percentis de cauda ($p95$ e $p99$) de cada execução, para identificar picos de latência (\emph{tail latency}) que as médias simples poderiam ocultar.
 
-Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de autenticação e autorização. Os testes executados com cada token forneceram os dados para avaliar a $\mathbf{H}_2$, e os cenários com avaliação local e consulta HTTP permitiram comparar a latência e a vazão para avaliar a $\mathbf{H}_3$. O pareamento das execuções e o tratamento dos resultados são melhores descritos no Capítulo\ref{chap:resultados}.
+Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de autenticação e autorização. Os testes executados com cada token forneceram os dados para avaliar a $\mathbf{H}_2$, e os cenários com avaliação local e consulta HTTP permitiram comparar a latência e a vazão para avaliar a $\mathbf{H}_3$. O Capítulo \ref{chap:resultados} explica como comparamos as execuções e resumimos as medidas das três rodadas.
 
 \input{capitulos/capitulo_4}
 

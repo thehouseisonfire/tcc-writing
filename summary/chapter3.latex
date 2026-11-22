@@ -18,7 +18,7 @@ O emissor define as permissões iniciais, o cliente apresenta o token e o módul
 
 \section{Solução Implementada}
 
-A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo~\ref{chap:implementacao}.
+A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo \ref{chap:implementacao}.
 
 \section{Ambiente Experimental}
 
@@ -29,10 +29,10 @@ O Docker Compose reuniu o Mosquitto e os serviços auxiliares. As cargas foram e
 A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 clientes, e 10 mensagens por cliente para cargas de 200 clientes, em três rodadas. Utilizamos casos-base sem autenticação, com o módulo \emph{Dynamic Security} e com autorização pelo próprio token.
 
 \begin{itemize}
-  \item \textbf{MTU:} Comparamos JWT e Biscuit de 25 blocos sob MTUs de 500 e 1.500~bytes, com e sem TLS, na Parte~1.
+  \item \textbf{MTU:} Comparamos JWT e Biscuit de 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS.
   \item \textbf{Conexão simultânea e reconexão:} Sincronizamos o início das conexões e exercitamos, em cenários próprios, ciclos de reconexão.
   \item \textbf{Complexidade das políticas:} Variamos o Biscuit entre 1, 5 e 25 blocos com as mesmas regras, e, em outra série, variamos as verificações em Datalog. Também testamos perfis de regras HTTP.
-  \item \textbf{Latência externa:} Introduzimos um atraso de 200~ms no serviço de autorização para JWT e Biscuit na Parte~1, com e sem TLS.
+  \item \textbf{Latência externa:} Introduzimos um atraso de 200 ms no serviço de autorização para JWT e Biscuit, com e sem TLS.
   \item \textbf{Arquitetura híbrida:} Testamos a entrega a múltiplos assinantes com políticas HTTP e híbridas.
   \item \textbf{Revogação:} Alteramos permissões durante o tráfego e, nos testes de ciclo de vida, exercitamos a renovação por \texttt{AUTH}.
   \item \textbf{Delegação:} Um cliente derivou um Biscuit com permissões limitadas e o transferiu para outro cliente publicar \cite{identity_management_for_agents}.
