@@ -6,3 +6,21 @@ O módulo em Rust é carregado como biblioteca dinâmica pelo Mosquitto e regist
 O emissor é separado do \emph{broker}. No campo \texttt{password} de \texttt{CONNECT}, o JWT é enviado como JWS compacto, com três segmentos em Base64URL, e o Biscuit como bytes serializados. O módulo verifica a assinatura, pode exigir a vinculação ao identificador MQTT e reaproveita a credencial verificada a partir do \emph{cache}. O cliente pode iniciar a reautenticação via \texttt{AUTH} para substituir a credencial em uma conexão ativa.
 
 No modo local, JWT e Biscuit utilizam a mesma lógica de filtragem de tópicos e dão precedência às proibições. O Biscuit avalia as verificações em Datalog a cada decisão local, incluindo restrições acrescentadas para atenuação e delegação. Os modos de autorização também incluem ACLs estáticas, SQLite, políticas do \emph{Dynamic Security} e consulta HTTP. O modo híbrido utiliza a política do token quando a consulta falha.
+
+\chapter{Resultados e Discussão}
+\label{chap:resultados}
+
+Foram analisados 792 resultados distintos de desempenho e 135 registros funcionais da campanha final. Houve confirmação dos comportamentos esperados de publicação, bloqueio de inscrição e entrega, reautenticação e delegação nos respectivos cenários. Esses dados sustentam a $\mathbf{H}_1$ para os fluxos exercitados.
+
+Na comparação com política local pelo token, o p95 de publicação do Biscuit foi maior nas três rodadas em sete das dez condições com QoS 1 ou 2. Com o perfil HTTP compartilhado, os tempos ficaram próximos em vários cenários. A variabilidade entre rodadas e a ausência de um requisito que fundamente uma margem de equivalência deixam a $\mathbf{H}_2$ inconclusiva.
+
+O Biscuit com Datalog de alta complexidade teve menor p95 em todas as rodadas das dez condições com QoS 1 ou 2 frente ao JWT com o perfil HTTP complexo. Em nove condições também teve maior vazão nas três rodadas. As publicações previstas foram permitidas nos dois arranjos, que implementaram regras distintas. Isso delimita a evidência da $\mathbf{H}_3$ às arquiteturas e cargas estudadas.
+
+Com as mesmas permissões, a cadeia Biscuit de 25 blocos apresentou p95 de publicação maior que a de um bloco nas três rodadas das seis combinações de carga e uso de TLS em QoS 1. O perfil Datalog alto apresentou p95 de publicação maior nas três rodadas de oito das dez combinações de carga em QoS 1 ou 2 sem TLS, quando comparado ao perfil médio. A vazão e os recursos variaram entre condições.
+
+Nas capturas sem TLS, o \texttt{CONNECT} do Biscuit de 25 blocos ocupou sete segmentos TCP com MTU de 500 bytes e três com MTU de 1.500 bytes. O JWT ocupou um segmento nessas duas MTUs. A redução da MTU ampliou a segmentação sem produzir um aumento consistente no p95 de conexão. As capturas analisadas não apresentaram fragmentação IP. O capítulo discute quando medir a profundidade da cadeia, o custo das regras e o tempo de consulta HTTP para orientar a adoção.
+
+\chapter{Conclusão}
+\label{chap:conclusao}
+
+O módulo em Rust e a suíte de testes demonstraram a viabilidade do Biscuit nos fluxos avaliados no Mosquitto, incluindo atenuação e delegação sem nova emissão. A evidência para a $\mathbf{H}_1$ se restringe aos casos exercitados, e a equivalência prevista na $\mathbf{H}_2$ permanece inconclusiva. Para a $\mathbf{H}_3$, a avaliação local com Biscuit apresentou menor latência de cauda e, na maioria das condições com confirmação, maior vazão frente ao JWT com consulta HTTP síncrona. A magnitude dessa vantagem depende da política, do serviço e da carga. O estudo avaliou o desempenho no ambiente experimental e as decisões de acesso dos cenários selecionados. A ergonomia de operação não foi medida diretamente.
