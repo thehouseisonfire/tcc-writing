@@ -29,7 +29,7 @@ O Docker Compose reuniu o Mosquitto e os serviços auxiliares. As cargas foram e
 A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 clientes, e 10 mensagens por cliente para cargas de 200 clientes, em três rodadas. Utilizamos casos-base sem autenticação, com o módulo \emph{Dynamic Security} e com autorização pelo próprio token.
 
 \begin{itemize}
-  \item \textbf{MTU:} Comparamos JWT e Biscuit de 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS.
+  \item \textbf{Unidade máxima de transmissão (MTU):} Comparamos JWT e Biscuit de 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS.
   \item \textbf{Conexão simultânea e reconexão:} Sincronizamos o início das conexões e exercitamos, em cenários próprios, ciclos de reconexão.
   \item \textbf{Complexidade das políticas:} Variamos o Biscuit entre 1, 5 e 25 blocos com as mesmas regras, e, em outra série, variamos as verificações em Datalog. Também testamos perfis de regras HTTP.
   \item \textbf{Latência externa:} Introduzimos um atraso de 200 ms no serviço de autorização para JWT e Biscuit, com e sem TLS.

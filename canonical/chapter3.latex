@@ -14,7 +14,7 @@ Entre as variáveis independentes, a primária foi o \textbf{tipo de token}, cru
 
 Adicionalmente, houve variação nos parâmetros do protocolo MQTT, especificamente nos níveis de Qualidade de Serviço (QoS), na carga imposta ao sistema (número de conexões simultâneas e de mensagens por cliente) e na complexidade das políticas de acesso (de regras simples a condicionais baseadas em tempo e em atributos).
 
-As variáveis dependentes concentram-se em métricas de desempenho. Medimos as latências de conexão, publicação e entrega ao assinante, a vazão de publicação e de recepção, em mensagens por segundo, e o consumo de CPU e memória do \emph{broker}. Nos testes de MTU, também medimos o tamanho das credenciais em bytes no tráfego sem TLS. Conforme o cenário, registramos o tempo até a resposta dos comandos administrativos e o número de consultas HTTP.
+As variáveis dependentes concentram-se em métricas de desempenho. Medimos as latências de conexão, publicação e entrega ao assinante, a vazão de publicação e de recepção, em mensagens por segundo, e o consumo de CPU e memória do \emph{broker}. Nos testes que variaram a unidade máxima de transmissão (\emph{Maximum Transmission Unit}, MTU), também medimos o tamanho das credenciais em bytes no tráfego sem TLS. Conforme o cenário, registramos o tempo até a resposta dos comandos administrativos e o número de consultas HTTP.
 
 Como variáveis de controle, mantivemos a mesma máquina hospedeira e as mesmas imagens dos serviços ao longo da campanha. Nas comparações diretas entre os formatos, mantivemos também a topologia dos clientes.
 
