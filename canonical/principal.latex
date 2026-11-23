@@ -145,6 +145,8 @@
 %   Demais parâmetros são os membros da banca (pelo menos 2 nomes)
 %   Não precisa passar o nome do Orientador
 %----------------------------------------------------------------
+
+\folhadeaprovacao{07/12/2026}{Andrei de Almeida Sampaio Braga - UFFS}{Samuel da Silva Feitosa - UFFS}{}
 % Inserir a folha de aprovação com a data e a banca confirmadas do TCC II.
 
 %----------------------------------------------------------------
