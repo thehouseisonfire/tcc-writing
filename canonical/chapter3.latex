@@ -87,6 +87,9 @@ Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de
 
 O módulo de extensão foi desenvolvido em Rust e compilado como uma biblioteca dinâmica (\texttt{.so}), que o Mosquitto carrega ao iniciar. A comunicação com o \emph{broker}, implementado em C, utiliza a versão 5 da API de módulos do Mosquitto \cite{eclipse_mosquitto_plugin}.
 
+% Link provisório para o repositório deste trabalho.
+O repositório está em \url{https://github.com/thehouseisonfire/TCC}.
+
 A FFI entre as linguagens foi implementada no próprio código Rust, com as funções exportadas seguindo a convenção de chamada do C e as estruturas dos eventos reproduzindo a organização dos campos definida nos cabeçalhos providenciados pelo Mosquitto. Durante a inicialização, o módulo consulta a configuração, carrega as chaves públicas dos tokens e registra as funções de retorno (\emph{callbacks}). Essas funções recebem os eventos do \emph{broker} e encaminham os dados para a lógica de autenticação ou autorização.
 
 A verificação das ACLs distingue as três operações comuns do fluxo de mensagens. A publicação é verificada sobre o tópico final, a inscrição sobre o filtro solicitado e a leitura no momento em que o \emph{broker} entrega uma mensagem a um assinante. Essa última verificação é o que nos permite aplicar mudanças na política aos clientes já inscritos. Nos cenários configurados para a verificação real dessa operação, o módulo reconsulta a política antes de cada entrega. Já no modo simplificado, verifica apenas se a credencial está expirada. As mensagens enviadas para tópicos de controle têm uma verificação separada.
