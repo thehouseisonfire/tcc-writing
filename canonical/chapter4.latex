@@ -52,7 +52,7 @@ Quando o módulo autorizou as publicações pelas permissões contidas no própr
 
 Com a mesma carga, quando ambos os formatos utilizaram o conjunto mais complexo de regras do serviço HTTP, a mediana do p95 ficou em cerca de 2,06 s para os dois. Também comparamos os formatos com um único cliente, cuja identidade no token precisava corresponder ao identificador informado ao Mosquitto. Já para as oito combinações de volume de mensagens, conjunto de regras HTTP (simples ou complexo) e uso de TLS, a razão mediana entre o p95 do Biscuit e o do JWT ficou entre 0,997 e 1,014, o que corresponde a diferenças inferiores a 1,5\%, enquanto a vazão apresentou maior variação.
 
-Nos testes com ACLs estáticas, as credenciais identificavam o papel do cliente e o módulo encaminhava a decisão de publicação para a ACL do Mosquitto quando não existia uma permissão relevante no token. O contador do módulo acabou por registrar essas operações como recusas na avaliação do token, enquanto o cliente registrou as publicações como concluídas. Como o contador é atualizado antes de passar a decisão para ACL, ele acabou por não ser uma fonte de confiável de quantas publicações a ACL autorizou. Por isso, nesse cenário, utilizamos a contagem do cliente como medida de operações concluídas.
+Nos testes com ACLs estáticas, as credenciais identificavam o papel do cliente e o módulo encaminhava a decisão de publicação para a ACL do Mosquitto quando não existia uma permissão relevante no token. O contador do módulo acabou por registrar essas operações como recusas na avaliação do token, enquanto o cliente registrou as publicações como concluídas. Como o contador é atualizado antes de passar a decisão para a ACL, ele acabou por não ser uma fonte confiável para saber quantas publicações a ACL autorizou. Por isso, nesse cenário, utilizamos a contagem do cliente como medida de operações concluídas.
 
 Pela margem de 10\%, 22 das 29 condições em que os dois formatos usaram as mesmas regras HTTP atenderam ao critério nas três medidas. Em cinco dessas condições, as três medidas também ficaram dentro da margem em todas as rodadas. Nas 21 condições com autorização pelo token ou por ACLs estáticas, pelo menos uma medida ficou fora da margem. Ao repetir a análise com margens de 5\% e 20\%, o número de condições equivalentes passou a 11 e 26, respectivamente, todas com HTTP. Assim, a equivalência prevista na $\mathbf{H}_2$ se verificou em parte dos testes com HTTP e ficou restrita a essa fonte de políticas.
 
@@ -161,7 +161,7 @@ Já quando as permissões dependem de um serviço consultado a cada publicação
 \chapter{Conclusão}
 \label{chap:conclusao}
 
-Desenvolvemos um módulo em Rust que integra o Biscuit e o JWT com sistemas de autenticação e autorização do Mosquitto por FFI, assim como uma suíte de testes que permite reproduzir as cargas, verificar as decisões de acesso, e medir o desempenho da autorização local e com/contra a consulta a uma segunda fonte de políticas.
+Desenvolvemos um módulo em Rust que integra o Biscuit e o JWT com sistemas de autenticação e autorização do Mosquitto por FFI, assim como uma suíte de testes que permite reproduzir as cargas, verificar as decisões de acesso e medir o desempenho da autorização local e da autorização por consulta a uma segunda fonte de políticas.
 
 Os testes confirmaram a viabilidade funcional do Biscuit, prevista na $\mathbf{H}_1$, nos fluxos avaliados com os dois formatos, da autenticação até a renovação da credencial durante uma conexão ativa, incluindo a publicação e o bloqueio de entregas, conforme a política. Nos testes com o Biscuit, um cliente também conseguiu atenuar permissões e transferir a credencial derivada para outro publicar sem precisar de uma nova emissão.
 
@@ -173,4 +173,4 @@ Em termos ergonômicos, o autor não considerou que escrever e manter políticas
 
 A avaliação de segurança abrangeu as decisões de acesso testadas, sem testes especializados.
 
-Para aplicações que precisam delegar permissões sem consultar o emissor, o Biscuit é uma opção, embora a escolha da fonte de políticas deva considerar quanto tempo uma alteração de acesso pode levar para produzir efeito, e do custo da consulta externa dado a carga esperada do caso de uso.
+Para aplicações que precisam delegar permissões sem consultar o emissor, o Biscuit é uma opção, embora a escolha da fonte de políticas deva considerar quanto tempo uma alteração de acesso pode levar para produzir efeito e o custo da consulta externa, dada a carga esperada do caso de uso.

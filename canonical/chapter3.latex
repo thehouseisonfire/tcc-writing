@@ -6,7 +6,7 @@ A avaliação foi predominantemente quantitativa, com apoio da documentação da
 
 \begin{itemize}
   \item $\mathbf{H}_1$: O Biscuit é funcionalmente viável no Mosquitto e cobre todos os casos de autenticação e autorização que o JWT pode atender nesse \emph{broker}.
-  \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários nos quais ambos oferecem a mesma funcionalidade, como a autenticação de clientes e a verificação de integridade da credencial.
+  \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao do JWT em cenários nos quais ambos oferecem a mesma funcionalidade, como a autenticação de clientes e a verificação de integridade da credencial.
   \item $\mathbf{H}_3$: Em cenários de autorização complexos, quando o arranjo com o JWT consulta um serviço externo a cada operação, a avaliação local com o Biscuit apresenta menor latência e maior vazão.
 \end{itemize}
 
