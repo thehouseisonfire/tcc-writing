@@ -68,7 +68,7 @@ O EMQX, desenvolvido em Erlang, é projetado para cenários de alta demanda, int
 
 Adicionalmente, provedores de nuvem como Amazon Web Services (AWS) e Microsoft Azure oferecem \emph{brokers} gerenciados (IoT Core e IoT Hub, respectivamente). Tais serviços abstraem a complexidade de operação e de escala, mas suas implementações são de código fechado, o que impede modificações internas ou a implantação em infraestrutura própria \cite{aws_iot,azure_iot}.
 
-De modo geral, as implementações convergem para a compatibilidade com as especificações MQTT v3.1, v3.1.1 e v5.0 e para o suporte a \emph{Transport Layer Security} (TLS). As principais diferenças residem no modelo de implantação, no nicho de desempenho (escalabilidade vs. leveza) e nos mecanismos de extensibilidade \cite{oasis_v50_1_6,oasis_v50_5_4,emqx_compare}.
+De modo geral, as implementações convergem para a compatibilidade com as especificações MQTT 3.1, 3.1.1 e 5.0 e para o suporte a \emph{Transport Layer Security} (TLS). As principais diferenças residem no modelo de implantação, no nicho de desempenho (escalabilidade vs. leveza) e nos mecanismos de extensibilidade \cite{oasis_v50_1_6,oasis_v50_5_4,emqx_compare}.
 
 \subsection{Mosquitto}
 
@@ -76,7 +76,7 @@ Dentre as implementações analisadas, o \emph{broker} Mosquitto se destaca como
 
 Essa característica o posiciona em um nicho semelhante ao do NanoMQ. Embora o NanoMQ, por ser um projeto mais recente, ofereça vantagens arquiteturais como \emph{multithreading} e suporte a MQTT-over-QUIC, o Mosquitto retém uma vantagem clara em popularidade, maturidade e estabilidade, com documentação mais exaustiva e um ecossistema de usuários mais ativo \cite{nanomq_site,emqx_compare,github_broker_topic}.
 
-Em termos de conformidade, o Mosquitto implementa integralmente as especificações MQTT v3.1, v3.1.1 e v5.0 e fornece os mecanismos de segurança essenciais, como suporte a TLS e controle de acesso via Listas de Controle de Acesso (ACLs) \cite{eclipse_mosquitto_conf,eclipse_mosquitto_auth_methods}. A característica mais relevante para este trabalho, contudo, é o suporte a módulos de extensão para autenticação e autorização. O \emph{broker} expõe um conjunto de \emph{hooks} (gatilhos) que permitem interceptar eventos críticos do ciclo de vida da conexão, delegando decisões de segurança a uma lógica customizada \cite{eclipse_mosquitto_plugin,mosquitto_auth_plug,mosquitto_go_auth}.
+Em termos de conformidade, o Mosquitto implementa integralmente as especificações MQTT 3.1, 3.1.1 e 5.0 e fornece os mecanismos de segurança essenciais, como suporte a TLS e controle de acesso via Listas de Controle de Acesso (ACLs) \cite{eclipse_mosquitto_conf,eclipse_mosquitto_auth_methods}. A característica mais relevante para este trabalho, contudo, é o suporte a módulos de extensão para autenticação e autorização. O \emph{broker} expõe um conjunto de \emph{hooks} (gatilhos) que permitem interceptar eventos críticos do ciclo de vida da conexão, delegando decisões de segurança a uma lógica customizada \cite{eclipse_mosquitto_plugin,mosquitto_auth_plug,mosquitto_go_auth}.
 
 O fato de o Mosquitto ser implementado em C facilita o uso de FFI, permitindo que a lógica de segurança seja escrita em outras linguagens.
 
@@ -135,7 +135,7 @@ Uma inovação crítica do MQTT 5.0 é o suporte a fluxos de autenticação este
 
 \begin{figure}[htb!]
 \centering\includegraphics[width=.80\textwidth]{figuras/1-auth-flow.png}
-\caption{Exemplo de fluxo de autenticação estendida no MQTT 5 utilizando o pacote \texttt{AUTH}}
+\caption{Exemplo de fluxo de autenticação estendida no MQTT 5.0 utilizando o pacote \texttt{AUTH}}
 \label{fig:fig1}
 {\footnotesize Fonte: \url{https://www.codementor.io/@emqtech/leveraging-enhanced-authentication-for-mqtt-security-25opca0497}. Acesso em: 14 nov. 2025.}
 \end{figure}
