@@ -167,7 +167,7 @@ A equivalência de desempenho prevista na $\mathbf{H}_2$ permaneceu inconclusiva
 
 Os resultados sustentam bem a $\mathbf{H}_3$ para as arquiteturas testadas. Com QoS 1 ou 2, o Biscuit avaliado localmente apresentou menor p95 de publicação nas três rodadas das dez condições comparadas com o JWT que consultava o serviço HTTP a cada publicação. Em nove dessas condições, também apresentou maior vazão nas três rodadas. As políticas aplicaram regras distintas e permitiram as publicações exercitadas.
 
-Em termos ergonômicos, o autor não considerou a expressão e manutenção de políticas em Datalog ou uso do Biscuit como token como significativamente mais complexo que a média dos outros métodos, particularmente considerando dificuldades de configurar e manter fontes de política separadas da aplicação, que poderiam ser evitadas em certos casos de uso. Isso, é claro, é uma experiência subjetiva.
+Em termos ergonômicos, o autor não considerou que escrever e manter políticas em Datalog ou usar o Biscuit como token fosse muito mais complexo do que recorrer aos outros métodos, sobretudo quando se leva em conta que, em certos casos de uso, o Biscuit dispensa a configuração e a manutenção de uma fonte de políticas separada da aplicação. Trata-se, é claro, de uma impressão subjetiva.
 
 A avaliação de segurança abrangeu as decisões de acesso testadas, sem testes especializados.
 
