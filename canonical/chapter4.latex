@@ -36,7 +36,7 @@ Nos testes de desempenho, comparamos JWT e Biscuit usando as permissões do pró
 
 Para comparar duas configurações, usamos os resultados do mesmo lote e da mesma rodada, mantendo o número de clientes e de mensagens por cliente, o nível de QoS, o uso de TLS e a forma como os clientes foram distribuídos no ambiente de teste. O p95 é calculado pelo gerador de carga ao fim de cada execução e indica em quanto tempo se completaram 95\% das operações medidas. Ao resumir as três rodadas, usamos o valor do meio entre os três p95. Da mesma forma, quando usamos uma razão, como a vazão do Biscuit dividida pela do JWT, fazemos a divisão em cada rodada e depois tomamos a mediana das três razões.
 
-Nas comparações de publicação em que variamos a carga e o QoS e usamos as permissões do próprio token, executamos o cenário com JWT antes do cenário com Biscuit em todas as rodadas. Como as medições variaram entre rodadas e a ordem foi sempre a mesma, diferenças pequenas merecem cautela. A série em que variamos o número de clientes, o volume de mensagens e o QoS incluiu 200 clientes com 10 mensagens por cliente, mas não com 100.
+Nas comparações de publicação em que variamos a carga e o QoS e usamos as permissões do próprio token, executamos o cenário com JWT antes do cenário com Biscuit em todas as rodadas. Como as medições variaram entre rodadas e a ordem foi sempre a mesma, diferenças pequenas merecem certo cuidado ao interpretar. A série em que variamos o número de clientes, o volume de mensagens e o QoS incluiu 200 clientes com 10 mensagens por cliente, mas não com 100.
 
 \section{Viabilidade funcional}
 \label{sec:resultados-viabilidade}

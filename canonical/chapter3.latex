@@ -56,7 +56,7 @@ Na matriz geral, executamos cargas de 10 e 100 mensagens por cliente com 10 e 50
 
 \textbf{Fragmentação e MTU:} Capturamos o tráfego com \texttt{tcpdump} para examinar a segmentação TCP e a fragmentação IP, relacionando-as ao tamanho das credenciais. Mais especificamente, comparamos o JWT e o Biscuit com 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS. Nos cenários sem TLS, utilizamos o TShark para identificar e contar os segmentos TCP que transportaram cada pacote \texttt{CONNECT}.
 
-\textbf{Conexão simultânea e reconexão:} Sincronizamos o início das conexões por meio de uma barreira para concentrar as solicitações de autenticação em um intervalo curto. Já nos cenários de reconexão, os clientes passaram por ciclos de desconexão, nova conexão e publicação, incluindo variantes em que solicitavam credenciais novas ao emissor.
+\textbf{Problema da manada e reconexão:} Para reproduzir o pico de conexões conhecido como problema da manada (\emph{thundering herd}), reiniciamos o Mosquitto e, depois de confirmar que o \emph{broker} já aceitava conexões, usamos uma barreira para que os clientes iniciassem suas conexões em um intervalo curto. Já nos cenários de reconexão, os clientes passaram por ciclos de desconexão, nova conexão e publicação, incluindo variantes em que solicitavam credenciais novas ao emissor.
 
 \textbf{Complexidade de Políticas:} Variamos o comprimento da cadeia Biscuit entre 1, 5 e 25 blocos, mantendo as regras, e utilizamos outra série de cenários para variar as verificações em Datalog, incluindo condições de tempo. Para a autorização externa, utilizamos perfis com diferentes conjuntos de regras, e registramos, junto à carga de publicação, a quantidade de consultas e o trabalho de avaliação que o serviço informou.
 
