@@ -41,7 +41,7 @@ Nas comparações de publicação em que variamos a carga e o QoS e usamos as pe
 
 Nos cenários de referência, o módulo autenticou os clientes com ambos os formatos e autorizou as publicações previstas. Em casos onde a política impedia a leitura de um tópico, o publicador enviou suas mensagens normalmente, mas o \emph{broker} impediu que os assinantes as recebessem. Já nos testes de reautenticação do MQTT 5.0, os clientes substituíram a credencial sem encerrar a conexão, passaram a publicar no tópico autorizado pelo novo token e tiveram a publicação recusada no tópico que só a credencial anterior permitia.
 
-Nos testes específicos do Biscuit, verificamos se as restrições acrescentadas ao token impediam a inscrição no filtro indicado e, nos ensaios de delegação, se o cliente que recebia a credencial derivada conseguia usá-la para publicar. Os resultados corresponderam ao esperado nos 63 registros de bloqueio de inscrição, nos 36 de bloqueio de entrega, nos 18 de reautenticação, e nos 18 de transferência da credencial derivada. Os ensaios confirmaram a viabilidade funcional do Biscuit no Mosquitto em todos os fluxos avaliados, conforme previsto na $\mathbf{H}_1$.
+Nos testes específicos do Biscuit, verificamos se as restrições acrescentadas ao token impediam a inscrição no filtro indicado e, no caso da delegação, se o cliente que recebia a credencial derivada conseguia usá-la para publicar. Os resultados corresponderam ao esperado nos 63 registros de bloqueio de inscrição, nos 36 de bloqueio de entrega, nos 18 de reautenticação, e nos 18 de transferência da credencial derivada. Os testes confirmaram a viabilidade funcional do Biscuit no Mosquitto em todos os fluxos avaliados, conforme previsto na $\mathbf{H}_1$.
 
 \section{Desempenho com a mesma fonte de políticas}
 \label{sec:resultados-paridade}
@@ -61,7 +61,7 @@ Para examinar o efeito do comprimento da cadeia, acrescentamos blocos vazios ao 
 
 \begin{table}[htbp]
     \centering
-    \caption{Mediana das três rodadas dos ensaios de complexidade com 200 clientes, 10 mensagens por cliente e QoS 1, sem TLS}
+    \caption{Mediana das três rodadas dos testes de complexidade com 200 clientes, 10 mensagens por cliente e QoS 1, sem TLS}
     \label{tab:resultados-complexidade}
     \small
     \setlength{\tabcolsep}{3pt}
@@ -161,9 +161,9 @@ Já quando as permissões dependem de um serviço consultado a cada publicação
 
 Desenvolvemos um módulo em Rust que integra o Biscuit e o JWT com sistemas de autenticação e autorização do Mosquitto por FFI, assim como uma suíte de testes que permite reproduzir as cargas, verificar as decisões de acesso, e medir o desempenho da autorização local e com/contra a consulta a uma segunda fonte de políticas.
 
-Os ensaios confirmaram a viabilidade funcional do Biscuit, prevista na $\mathbf{H}_1$, nos fluxos em que testamos os dois formatos, da autenticação até a renovação da credencial durante uma conexão ativa, incluindo a publicação e o bloqueio de entregas, conforme a política. Nos ensaios com o Biscuit, um cliente também conseguiu atenuar permissões e transferir a credencial derivada para outro publicar sem precisar de uma nova emissão.
+Os testes confirmaram a viabilidade funcional do Biscuit, prevista na $\mathbf{H}_1$, nos fluxos avaliados com os dois formatos, da autenticação até a renovação da credencial durante uma conexão ativa, incluindo a publicação e o bloqueio de entregas, conforme a política. Nos testes com o Biscuit, um cliente também conseguiu atenuar permissões e transferir a credencial derivada para outro publicar sem precisar de uma nova emissão.
 
-A equivalência de desempenho prevista na $\mathbf{H}_2$ permaneceu inconclusiva. Sob o mesmo perfil HTTP, os formatos apresentaram latências de publicação próximas em várias condições. Com autorização local pelo token, o Biscuit apresentou maior latência de cauda de publicação em parte das cargas, e a vazão variou entre rodadas. Os ensaios também mostraram que a profundidade da cadeia e a complexidade das regras podem elevar a latência de cauda, enquanto a MTU condiciona a segmentação do \texttt{CONNECT}.
+A equivalência de desempenho prevista na $\mathbf{H}_2$ permaneceu inconclusiva. Sob o mesmo perfil HTTP, os formatos apresentaram latências de publicação próximas em várias condições. Com autorização local pelo token, o Biscuit apresentou maior latência de cauda de publicação em parte das cargas, e a vazão variou entre rodadas. Os testes também mostraram que a profundidade da cadeia e a complexidade das regras podem elevar a latência de cauda, enquanto a MTU condiciona a segmentação do \texttt{CONNECT}.
 
 Os resultados sustentam bem a $\mathbf{H}_3$ para as arquiteturas testadas. Nas dez condições com QoS 1 ou 2, os dois arranjos autorizaram todas as publicações previstas, e o Biscuit avaliado localmente apresentou menor p95 de publicação nas três rodadas em comparação com o arranjo que usava o JWT e consultava o serviço HTTP a cada publicação. Em nove dessas condições, o Biscuit local também apresentou maior vazão nas três rodadas.
 

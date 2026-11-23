@@ -50,7 +50,7 @@ Um programa em Python orquestrou os testes com o \texttt{mqtt-loadgen}, implemen
 
 \section{Cenários de Teste}
 
-Estabelecemos casos-base para obter referências de latência e vazão do ambiente, com cenários sem autenticação, com o módulo \emph{Dynamic Security} e com permissões de publicação e inscrição no próprio token. Esses casos tiveram variantes com e sem TLS. Os ensaios com TLS mediram o desempenho da comunicação protegida. A campanha não incluiu testes específicos de validação de certificados.
+Estabelecemos casos-base para obter referências de latência e vazão do ambiente, com cenários sem autenticação, com o módulo \emph{Dynamic Security} e com permissões de publicação e inscrição no próprio token. Esses casos tiveram variantes com e sem TLS. Os testes com TLS mediram o desempenho da comunicação protegida. A campanha não incluiu testes específicos de validação de certificados.
 
 Na matriz geral, executamos cargas de 10 e 100 mensagens por cliente com 10 e 50 clientes, além de cargas de 10 mensagens por cliente com 200 clientes. Utilizamos QoS 0, 1 e 2, com níveis fixos ou combinados conforme o cenário. Os testes que dependiam de uma sequência própria de operações, como a revogação durante a entrega de mensagens, utilizaram cargas fixas. Cada condição prevista no cronograma foi repetida em três rodadas.
 
@@ -84,11 +84,11 @@ Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de
 
 \chapter{Trabalhos Futuros}
 
-Como a campanha injetou falhas parciais e totais do serviço HTTP apenas com o JWT, seria útil repetir esses ensaios com o Biscuit, sob as mesmas cargas e condições de falha, para verificar quais operações permanecem autorizadas quando o módulo recorre à política do token.
+Como a campanha injetou falhas parciais e totais do serviço HTTP apenas com o JWT, seria útil repetir esses testes com o Biscuit, sob as mesmas cargas e condições de falha, para verificar quais operações permanecem autorizadas quando o módulo recorre à política do token.
 
-Os ensaios com atraso de 200 ms permitem comparar o JWT e o Biscuit com e sem TLS. A partir desses dados, seria possível estudar o efeito do atraso sobre a latência de publicação e a vazão, estendendo a comparação a 1 segundo, condição para a qual a campanha reuniu dados apenas com o JWT.
+Os testes com atraso de 200 ms permitem comparar o JWT e o Biscuit com e sem TLS. A partir desses dados, seria possível estudar o efeito do atraso sobre a latência de publicação e a vazão, estendendo a comparação a 1 segundo, condição para a qual a campanha reuniu dados apenas com o JWT.
 
-As capturas com o JWT a 200 e 9.000 bytes podem orientar os ensaios de MTU com o Biscuit, nos quais se observaria a segmentação do \texttt{CONNECT} e o tempo de conexão. Para testar 9.000 bytes, é preciso verificar se todas as interfaces entre o cliente e o \emph{broker} suportam essa MTU.
+As capturas com o JWT a 200 e 9.000 bytes podem orientar os testes de MTU com o Biscuit, nos quais se observaria a segmentação do \texttt{CONNECT} e o tempo de conexão. Para testar 9.000 bytes, é preciso verificar se todas as interfaces entre o cliente e o \emph{broker} suportam essa MTU.
 
 A repetição dos testes em dispositivos embarcados pode revelar gargalos de processamento que não aparecem no ambiente conteinerizado da campanha. Fundamentalmente, isso possibilitaria a avaliação precisa do consumo energético comparativo entre as soluções de token, uma métrica crítica para dispositivos operados a bateria.
 

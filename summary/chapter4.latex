@@ -10,7 +10,7 @@ No modo local, o JWT e o Biscuit utilizam a mesma lógica de filtragem de tópic
 \chapter{Resultados e Discussão}
 \label{chap:resultados}
 
-Foram analisados 792 resultados distintos de desempenho e 135 registros funcionais da campanha final. Houve confirmação dos comportamentos esperados de publicação, bloqueio de inscrição e entrega, reautenticação e delegação nos respectivos cenários. Os ensaios confirmaram a viabilidade funcional do Biscuit nos fluxos avaliados, conforme previsto na $\mathbf{H}_1$.
+Foram analisados 792 resultados distintos de desempenho e 135 registros funcionais da campanha final. Houve confirmação dos comportamentos esperados de publicação, bloqueio de inscrição e entrega, reautenticação e delegação nos respectivos cenários. Os testes confirmaram a viabilidade funcional do Biscuit nos fluxos avaliados, conforme previsto na $\mathbf{H}_1$.
 
 Na comparação com política local pelo token, o p95 de publicação do Biscuit foi maior nas três rodadas em sete das dez condições com QoS 1 ou 2. Com o perfil HTTP compartilhado, os tempos ficaram próximos em vários cenários. Nos testes com ACL estática, o contador de recusas do módulo registra a avaliação do token antes de delegar a decisão à ACL. A variabilidade entre rodadas e a ausência de um requisito que fundamente uma margem de equivalência deixam a $\mathbf{H}_2$ inconclusiva.
 
