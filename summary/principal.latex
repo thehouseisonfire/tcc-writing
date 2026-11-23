@@ -5,5 +5,5 @@
               {MQTT, Biscuit, JWT, Security, Performance evaluation}
 
 \begin{resumo}
-O módulo em Rust para o Mosquitto oferece suporte ao JWT e ao Biscuit. Os testes demonstraram a viabilidade do Biscuit nos fluxos avaliados, incluindo a atenuação e a delegação de permissões sem consultar o emissor. A equivalência de desempenho permaneceu inconclusiva. Na comparação entre o Biscuit avaliado localmente e o JWT com uma consulta HTTP por publicação, a latência no percentil 95 foi menor com o Biscuit nas três rodadas das dez condições com QoS 1 ou 2, e a vazão de publicações autorizadas e confirmadas foi maior nas três rodadas de nove delas.
+O módulo em Rust para o Mosquitto oferece suporte ao JWT e ao Biscuit. Os testes demonstraram a viabilidade do Biscuit nos fluxos avaliados, incluindo a atenuação e a delegação de permissões sem consultar o emissor. Pela margem descritiva de 10\%, a equivalência de desempenho ocorreu apenas com regras HTTP compartilhadas, em 22 das 29 condições com QoS 1 ou 2. Na comparação entre o Biscuit avaliado localmente e o JWT com uma consulta HTTP por publicação, a latência no percentil 95 foi menor com o Biscuit nas três rodadas das dez condições com QoS 1 ou 2, e a vazão de publicações autorizadas e confirmadas foi maior nas três rodadas de nove delas.
 \end{resumo}
