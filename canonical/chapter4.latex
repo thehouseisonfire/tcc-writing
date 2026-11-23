@@ -57,7 +57,7 @@ A equivalência prevista na $\mathbf{H}_2$ permanece inconclusiva, pois os resul
 \section{Comprimento da cadeia e complexidade das regras}
 \label{sec:resultados-complexidade}
 
-Para examinar o efeito do comprimento da cadeia, acrescentamos blocos vazios ao Biscuit, de modo que as versões com 1, 5 e 25 blocos preservassem as mesmas permissões. Já nos testes com Datalog, variamos as próprias regras da política, dos perfis de menor complexidade aos que acrescentavam condições como região, tempo, e classe de dispositivo. A Tabela \ref{tab:resultados-complexidade} mostra os resultados dos dois testes para 200 clientes com 10 mensagens por cliente, em QoS 1 e sem TLS. Nela, o comprimento da credencial corresponde ao número de caracteres da representação usada para configurar o teste, enquanto as capturas da Seção \ref{sec:resultados-mtu} mostram quantos bytes foram enviados no campo da credencial.
+Para examinar o efeito do comprimento da cadeia, acrescentamos blocos vazios ao Biscuit, de modo que as versões com 1, 5 e 25 blocos preservassem as mesmas permissões. Já nos testes com Datalog, variamos as próprias regras da política, dos perfis de menor complexidade aos que acrescentavam condições como região, tempo, e classe de dispositivo. A Tabela \ref{tab:resultados-complexidade} mostra os resultados dos dois testes para 200 clientes com 10 mensagens por cliente, em QoS 1 e sem TLS. Na tabela, contamos os caracteres do Biscuit de referência de cada cenário, guardado como texto em Base64URL. Para conectar cada cliente, o gerador de carga decodificava o token desse cliente e enviava os bytes resultantes no campo \texttt{password}, cujo tamanho medimos nas capturas da Seção \ref{sec:resultados-mtu}.
 
 \begin{table}[htbp]
     \centering
