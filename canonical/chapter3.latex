@@ -80,7 +80,182 @@ Como padrão, o tratamento estatístico incluiu o cálculo, pelo gerador de carg
 
 Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de autenticação e autorização. Os testes executados com cada token forneceram os dados para avaliar a $\mathbf{H}_2$, e os cenários com avaliação local e consulta HTTP permitiram comparar a latência e a vazão para avaliar a $\mathbf{H}_3$. O Capítulo \ref{chap:resultados} explica como comparamos as execuções e resumimos as medidas das três rodadas.
 
-\input{capitulos/capitulo_4}
+\chapter{Implementação}
+\label{chap:implementacao}
+
+\section{Integração com o Mosquitto}
+
+O módulo de extensão foi desenvolvido em Rust e compilado como uma biblioteca dinâmica (\texttt{.so}), que o Mosquitto carrega ao iniciar. A comunicação com o \emph{broker}, implementado em C, utiliza a versão 5 da API de módulos do Mosquitto \cite{eclipse_mosquitto_plugin}.
+
+A FFI entre as linguagens foi implementada no próprio código Rust, com as funções exportadas seguindo a convenção de chamada do C e as estruturas dos eventos reproduzindo a organização dos campos definida nos cabeçalhos providenciados pelo Mosquitto. Durante a inicialização, o módulo consulta a configuração, carrega as chaves públicas dos tokens e registra as funções de retorno (\emph{callbacks}). Essas funções recebem os eventos do \emph{broker} e encaminham os dados para a lógica de autenticação ou autorização.
+
+A verificação das ACLs distingue as três operações comuns do fluxo de mensagens. A publicação é verificada sobre o tópico final, a inscrição sobre o filtro solicitado e a leitura no momento em que o \emph{broker} entrega uma mensagem a um assinante. Essa última verificação é o que nos permite aplicar mudanças na política aos clientes já inscritos. Nos cenários configurados para a verificação real dessa operação, o módulo reconsulta a política antes de cada entrega. Já no modo simplificado, verifica apenas se a credencial está expirada. As mensagens enviadas para tópicos de controle têm uma verificação separada.
+
+\section{Autenticação e Ciclo de Vida da Credencial}
+
+O emissor de tokens é um serviço separado do \emph{broker}. Na campanha, utilizamos credenciais preparadas para os testes ou solicitadas ao emissor, conforme o cenário. Na autenticação pelo campo \texttt{password} do pacote \texttt{CONNECT}, o cliente envia o JWT como JWS compacto, com três segmentos em Base64URL, ou o Biscuit como dados binários serializados em Protobuf. Como o Biscuit pode conter bytes nulos, o módulo utiliza o comprimento fornecido no evento de autenticação para ler a credencial inteira. Para ter acesso a esse campo, utilizamos a revisão do Mosquitto indicada na Metodologia.
+
+Para a validação dos tokens, a biblioteca \texttt{jsonwebtoken} valida a assinatura e a expiração do JWT, enquanto a \texttt{biscuit\_auth} verifica a cadeia de assinaturas a partir da chave pública raiz do Biscuit. Caso haja fatos \texttt{expires\_at}, o módulo considera o prazo mais curto que foi encontrado. Para ambos os formatos, a configuração permite exigir também que a identidade registrada no token corresponda ao identificador do cliente MQTT \cite{rust_jsonwebtoken,biscuit_spec}.
+
+Após a autenticação, o módulo guarda as declarações do JWT ou o objeto Biscuit já verificado em um \emph{cache} para possibilitar o reaproveitamento da verificação criptográfica em futuras operações. Quando uma verificação de ACL encontra uma credencial expirada nesse \emph{cache}, o módulo nega a operação e solicita a desconexão do cliente. Nos cenários que utilizam a autenticação estendida do MQTT 5.0, o cliente pode iniciar a renovação antes da expiração da credencial, enviando o novo token nos dados de autenticação do pacote \texttt{AUTH}. Se a validação for bem-sucedida, o módulo substitui a credencial associada à conexão.
+
+\section{Avaliação das Políticas de Acesso}
+
+No modo de autorização local pelo token, o módulo procura uma permissão para a operação e o tópico. No caso do JWT, as declarações \texttt{grants} e \texttt{denies} registram as permissões e as proibições. Já com o Biscuit, o autorizador avalia as verificações em Datalog com o tópico, a operação e o horário. Em seguida, o módulo examina os fatos de permissão e proibição obtidos da avaliação. Ambos os formatos utilizam a mesma lógica de correspondência de filtros MQTT, incluindo os curingas \texttt{+} e \texttt{\#}. Proibições têm precedência sobre permissões, e a ausência de uma permissão resulta em uma recusa.
+
+Além da avaliação local pelo token, o módulo oferece integração com as ACLs estáticas do Mosquitto, com uma configuração do módulo de \emph{Dynamic Security}, com políticas baseadas em papéis em SQLite e com um servidor de autorização externo via HTTP. Em tais casos, o módulo pode usar o identificador ou um papel extraído do token para definir a política de acesso.
+
+No modo híbrido, o módulo aplica a decisão de autorização devolvida pelo serviço HTTP e recorre às permissões do token quando a consulta falha. Dessa forma, ambos os formatos podem ser avaliados com políticas locais ou externas, e o custo dessa consulta HTTP depende da configuração e do estado do servidor, algo que exploramos em diversos cenários.
+
+\chapter{Resultados e Discussão}
+\label{chap:resultados}
+
+\section{Escopo da análise}
+
+A campanha reuniu 4.101 resultados aceitos, distribuídos em 486 lotes de execução. Ao todo, foram 1.367 condições de teste, cada uma repetida em três rodadas. Desses dados, utilizamos 792 resultados para comparar o desempenho e 135 registros de testes funcionais para verificar se o módulo permitiu ou recusou as operações previstas em cada cenário.
+
+Em cada rodada, comparamos as duas configurações mantendo o número de clientes e de mensagens por cliente, o nível de QoS, o uso de TLS, e a forma como os clientes foram distribuídos no ambiente de teste. O p95 é calculado pelo gerador de carga ao fim de cada execução e indica em quanto tempo se completaram 95\% das operações medidas. Ao resumir as três rodadas, usamos o valor do meio entre os três p95. Da mesma forma, quando usamos uma razão, como a vazão do Biscuit dividida pela do JWT, fazemos a divisão em cada rodada e depois tomamos a mediana das três razões.
+
+Nas comparações de publicação em que variamos a carga e o QoS e usamos as permissões do próprio token, executamos o cenário com o JWT antes do cenário com o Biscuit em todas as rodadas. Como as medições variaram entre rodadas e a ordem foi sempre a mesma, diferenças pequenas merecem certo cuidado ao interpretar. Na série em que variamos o número de clientes, o volume de mensagens e o QoS, limitamos a carga de 200 clientes a 10 mensagens por cliente, devido à carga e ao tempo do experimento.
+
+\section{Viabilidade funcional}
+\label{sec:resultados-viabilidade}
+
+Nos cenários de referência, o módulo autenticou os clientes com ambos os formatos e autorizou as publicações previstas. Em casos onde a política impedia a leitura de um tópico, o publicador enviou suas mensagens normalmente, mas o \emph{broker} impediu que os assinantes as recebessem. Já nos testes de reautenticação do MQTT 5.0, os clientes substituíram a credencial sem encerrar a conexão, passaram a publicar no tópico autorizado pelo novo token e tiveram a publicação recusada no tópico que só a credencial anterior permitia.
+
+Nos testes específicos do Biscuit, verificamos se as restrições acrescentadas ao token impediam a inscrição no filtro indicado e, no caso da delegação, se o cliente que recebia a credencial derivada conseguia usá-la para publicar. Os resultados corresponderam ao esperado nos 63 registros de bloqueio de inscrição, nos 36 de bloqueio de entrega, nos 18 de reautenticação, e nos 18 de transferência da credencial derivada. Os testes confirmaram a viabilidade funcional do Biscuit no Mosquitto em todos os fluxos avaliados, conforme previsto na $\mathbf{H}_1$.
+
+\section{Desempenho com a mesma fonte de políticas}
+\label{sec:resultados-paridade}
+
+Para avaliar a $\mathbf{H}_2$, adotamos após a coleta uma margem descritiva de 10\% em relação ao JWT. Essa margem permite usar uma mesma referência para cargas de escalas distintas, e representa uma medida que pode ser relevante em casos de uso genéricos. Em cada condição com QoS 1 ou 2, consideramos o desempenho equivalente quando a mediana das três razões do Biscuit em relação ao JWT ficou entre 0,90 e 1,10, tanto para o p95 de conexão e de publicação, quanto para a vazão de publicações concluídas pelo cliente.
+
+Quando o módulo autorizou as publicações pelas permissões contidas no próprio token, o p95 do Biscuit foi maior que o do JWT nas três rodadas de sete das dez condições com QoS 1 ou 2. A vazão variou mais entre rodadas, como se vê no teste com 50 clientes, 10 mensagens por cliente e QoS 1, em que, ao longo das três rodadas, a vazão do Biscuit variou de 0,21 a 3,81 vezes a do JWT. Nessa mesma carga, o p95 de publicação variou de 0,21 a 0,81 ms com o Biscuit e de 0,13 a 0,26 ms com o JWT.
+
+Com a mesma carga, quando ambos os formatos utilizaram o conjunto mais complexo de regras do serviço HTTP, a mediana do p95 ficou em cerca de 2,06 s para os dois. Também comparamos os formatos com um único cliente, cuja identidade no token precisava corresponder ao identificador informado ao Mosquitto. Já para as oito combinações de volume de mensagens, conjunto de regras HTTP (simples ou complexo) e uso de TLS, a razão mediana entre o p95 do Biscuit e o do JWT ficou entre 0,997 e 1,014, o que corresponde a diferenças inferiores a 1,5\%, enquanto a vazão apresentou maior variação.
+
+Nos testes com ACLs estáticas, as credenciais identificavam o papel do cliente e o módulo encaminhava a decisão de publicação para a ACL do Mosquitto quando não existia uma permissão relevante no token. O contador do módulo acabou por registrar essas operações como recusas na avaliação do token, enquanto o cliente registrou as publicações como concluídas. Como o contador é atualizado antes de passar a decisão para a ACL, ele acabou por não ser uma fonte confiável para saber quantas publicações a ACL autorizou. Por isso, nesse cenário, utilizamos a contagem do cliente como medida de operações concluídas.
+
+Pela margem de 10\%, 22 das 29 condições em que os dois formatos usaram as mesmas regras HTTP atenderam ao critério nas três medidas. Em cinco dessas condições, as três medidas também ficaram dentro da margem em todas as rodadas. Nas 21 condições com autorização pelo token ou por ACLs estáticas, pelo menos uma medida ficou fora da margem. Ao repetir a análise com margens de 5\% e 20\%, o número de condições equivalentes passou a 11 e 26, respectivamente, todas com HTTP. Assim, a equivalência prevista na $\mathbf{H}_2$ se verificou em parte dos testes com HTTP e ficou restrita a essa fonte de políticas.
+
+\section{Comprimento da cadeia e complexidade das regras}
+\label{sec:resultados-complexidade}
+
+Para examinar o efeito do comprimento da cadeia, acrescentamos blocos vazios ao Biscuit, de modo que as versões com 1, 5 e 25 blocos preservassem as mesmas permissões. Já nos testes com Datalog, variamos as próprias regras da política, dos perfis de menor complexidade aos que acrescentavam condições como região, tempo, e classe de dispositivo. A Tabela \ref{tab:resultados-complexidade} mostra os resultados dos dois testes para 200 clientes com 10 mensagens por cliente, em QoS 1 e sem TLS. Na tabela, contamos os caracteres do Biscuit de referência de cada cenário, guardado como texto em Base64URL. Para conectar cada cliente, o gerador de carga decodificava o token desse cliente e enviava os bytes resultantes no campo \texttt{password}, cujo tamanho medimos nas capturas da Seção \ref{sec:resultados-mtu}.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Mediana das três rodadas dos testes de complexidade com 200 clientes, 10 mensagens por cliente e QoS 1, sem TLS}
+    \label{tab:resultados-complexidade}
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{@{}lrrrrrr@{}}
+        \hline
+        Condição & \shortstack{Credencial\\(caract.)} & \shortstack{p95 de\\conexão (ms)} &
+        \shortstack{p95 de\\publicação (ms)} & \shortstack{Vazão\\(msg/s)} &
+        \shortstack{CPU\\(s)} & \shortstack{Memória\\(MiB)} \\
+        \hline
+        1 bloco    &   332 & 22,14 & 0,59 & 31,57 & 1,38 & 2,09 \\
+        5 blocos   &   919 & 27,60 & 0,81 & 31,12 & 1,41 & 2,10 \\
+        25 blocos  & 3.852 & 33,54 & 1,05 & 32,63 & 1,59 & 3,66 \\
+        \hline
+        Datalog baixo &   715 & 21,66 & 0,56 & 28,34 & 1,56 & 3,14 \\
+        Datalog médio & 1.474 & 17,79 & 0,78 & 33,01 & 1,62 & 3,84 \\
+        Datalog alto  & 2.331 & 21,94 & 1,28 & 23,71 & 2,26 & 4,61 \\
+        \hline
+    \end{tabular}
+    \par\smallskip
+    {\footnotesize Para a memória, usamos a média das amostras de cada rodada.\par
+    Fonte: elaboração própria com dados da campanha final.\par}
+\end{table}
+
+Nos testes em QoS 1 com as três versões da cadeia, usamos 10 clientes com 10 ou 100 mensagens por cliente e 200 clientes com 10 mensagens por cliente, repetindo cada carga com e sem TLS. Nas seis combinações, o p95 de publicação foi maior com 25 blocos do que com apenas um bloco nas três rodadas. Sem TLS, a cadeia de 25 blocos também teve p95 de conexão, tempo acumulado de CPU, e memória média do contêiner do \emph{broker} maiores que os da cadeia com um bloco nas três rodadas de cada carga. Entre as cadeias de 5 blocos e de um bloco, as diferenças foram menos consistentes.
+
+Também comparamos as cadeias de 5 e 25 blocos em uma série com mais cargas e níveis de QoS, sem TLS. Das dez combinações em QoS 1 ou 2, em cinco o p95 de publicação foi maior com 25 blocos nas três rodadas e, em uma, foi menor nas três. Assim, passar de 5 para 25 blocos tendeu a elevar o p95 de publicação, enquanto a vazão variou em ambas as direções.
+
+Para as regras em Datalog, o perfil mais complexo apresentou p95 de publicação maior que o perfil mais simples em todas as rodadas das três cargas sem TLS. Ao repetir essas cargas com TLS, a diferença se manteve nas três rodadas de apenas uma delas. Na comparação entre os perfis alto e médio, que abrangeu as dez combinações de carga em QoS 1 ou 2 sem TLS, o p95 de publicação foi maior com o perfil alto nas três rodadas de oito combinações. O tempo acumulado de CPU do contêiner do \emph{broker} também foi maior nas três rodadas de seis das combinações, enquanto a memória média foi menor nas rodadas de cinco e a vazão acabou variando em ambas as direções.
+
+Na carga da Tabela \ref{tab:resultados-complexidade}, passar de 1 para 25 blocos elevou o p95 de publicação de 0,59 para 1,05 ms, enquanto a vazão permaneceu próxima de 32 mensagens por segundo. A cadeia mais longa, portanto, pode aumentar o tempo de espera pela confirmação de parte das publicações, mesmo que o \emph{broker} continue atendendo praticamente o mesmo número de mensagens por segundo. Já nos testes com Datalog, as regras e o tamanho da credencial variaram juntos, de modo que as medições refletem o custo de cada configuração completa.
+
+\section{Tamanho da credencial e segmentação TCP}
+\label{sec:resultados-mtu}
+
+Nos testes com MTUs de 500 e 1.500 bytes, os pacotes IP respeitaram o limite configurado nas 72 capturas analisadas, sem fragmentação observada. Nas 36 capturas sem TLS, remontamos os pacotes MQTT \texttt{CONNECT}, o que nos permitiu contar os segmentos TCP usados para transportá-los e assim medir o tamanho do campo \texttt{password}. Nas conexões com TLS, pudemos observar o tráfego TCP nas portas usadas pelo MQTT ao longo da carga, mas a identificação de cada \texttt{CONNECT} exigiria descriptografar a sessão.
+
+O campo \texttt{password} continha de 2.889 a 2.891 bytes com o Biscuit de 25 blocos e de 338 a 346 bytes com o JWT (conforme o número de dígitos no identificador do cliente). A Tabela \ref{tab:resultados-mtu} mostra como a diferença de tamanho entre os dois tokens apareceu no número de segmentos que transportaram o \texttt{CONNECT} em cada MTU.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Segmentos TCP por pacote MQTT \texttt{CONNECT} nas capturas sem TLS}
+    \label{tab:resultados-mtu}
+    \small
+    \begin{tabular}{rrr}
+        \hline
+        MTU (bytes) & JWT & Biscuit de 25 blocos \\
+        \hline
+          500 & 1 & 7 \\
+        1.500 & 1 & 3 \\
+        \hline
+    \end{tabular}
+    \par\smallskip
+    {\footnotesize Fonte: elaboração própria com dados da campanha final.\par}
+\end{table}
+
+Nas capturas sem TLS, ao reduzir a MTU de 1.500 para 500 bytes, o \texttt{CONNECT} do Biscuit de 25 blocos passou de três para sete segmentos, enquanto o JWT continuou ocupando um único segmento. Para o mesmo Biscuit, a razão mediana entre o p95 de conexão na MTU menor e na maior variou de 0,95 a 1,09 nas cargas com e sem TLS.
+
+Ao comparar os formatos em cada MTU, o p95 de conexão do Biscuit foi maior nas três rodadas de quatro das seis condições sem TLS, e de duas das seis condições com TLS. Como o tempo medido inclui tanto a transmissão quanto o processamento da credencial pelo \emph{broker}, a comparação com o mesmo token nas duas MTUs é a que melhor mostra o efeito de reduzir esse limite. No caso do Biscuit, a redução da MTU se refletiu mais claramente no número de segmentos do que no tempo até a confirmação da conexão.
+
+\section{Autorização local e consulta HTTP}
+\label{sec:resultados-http}
+
+Para avaliar a $\mathbf{H}_3$, comparamos duas formas de decidir se uma publicação deve ser permitida. Na primeira, o módulo avaliava localmente a política em Datalog de um Biscuit, com condições de região, tempo, e classe de dispositivo. Na segunda, o cliente apresentava um JWT e, a cada publicação, o módulo aguardava a resposta de um serviço HTTP, cujas regras consideravam o cliente, o papel, e o tópico. As regras eram diferentes, embora ambos os arranjos tenham permitido todas as publicações previstas nos tópicos testados.
+
+Com a avaliação local, o p95 de publicação foi menor nas três rodadas das dez condições com QoS 1 ou 2. Em nove delas, também houve mais publicações autorizadas e confirmadas por segundo nas três rodadas. A Tabela \ref{tab:resultados-http-exemplo} mostra o caso de 50 clientes com 10 mensagens por cliente em QoS 1. Nessa carga, o Biscuit teve de 1,48 a 2,79 vezes a vazão do JWT, com razão mediana de 1,86. Para calcular a vazão, usamos a duração da execução dos clientes, que abrange a conexão e a publicação das mensagens.
+
+\begin{table}[H]
+    \centering
+    \caption{Autorização local e HTTP com 50 clientes, 10 mensagens por cliente e QoS 1}
+    \label{tab:resultados-http-exemplo}
+    \small
+    \begin{tabularx}{\textwidth}{lXXXX}
+        \hline
+        & \multicolumn{2}{c}{p95 de publicação (ms)} & \multicolumn{2}{c}{Vazão (mensagens/s)} \\
+        Rodada & Biscuit local & JWT via HTTP & Biscuit local & JWT via HTTP \\
+        \hline
+        1 & 2,56 & 2.059,88 & 27,14 & 14,62 \\
+        2 & 1,19 & 2.056,68 & 25,90 & 17,50 \\
+        3 & 2,25 & 2.057,34 & 39,95 & 14,32 \\
+        \hline
+    \end{tabularx}
+    \par\smallskip
+    {\footnotesize Fonte: elaboração própria com dados da campanha final.\par}
+\end{table}
+
+Os resultados sustentam a vantagem prevista na $\mathbf{H}_3$ para as publicações com confirmação nos casos testados, em que a avaliação local não sofre com a espera por uma resposta HTTP a cada mensagem. O tamanho dessa vantagem pode variar, dependendo das regras avaliadas, do tempo de resposta do serviço, e de quantos clientes publicam ao mesmo tempo.
+
+\section{Implicações para a adoção no Mosquitto}
+\label{sec:resultados-implicacoes}
+
+Para aplicações em que um cliente precisa repassar parte de suas permissões sem consultar o emissor, o Biscuit permite derivar uma credencial mais restrita e entregá-la a outro cliente. Nesse caso, convém limitar a profundidade da cadeia ao necessário e medir o tempo de conexão e de publicação sob a carga esperada, sobretudo quando muitos clientes se conectam ao mesmo tempo em uma rede com MTU reduzida.
+
+Já quando as permissões dependem de um serviço consultado a cada publicação, o tempo de resposta desse serviço importa tanto mais quanto maior for o número de clientes que publicam em paralelo. Se a aplicação puder avaliar a política no próprio \emph{broker}, os resultados com QoS 1 e 2 indicam que essa escolha pode reduzir a latência e aumentar a vazão. Na escolha da fonte de políticas, também importa o prazo em que uma alteração de permissão precisa produzir efeito. Os testes verificaram as decisões de acesso previstas para cada cenário, enquanto uma avaliação mais abrangente da segurança e uma medição direta da ergonomia de operação ficam em aberto.
+
+\chapter{Conclusão}
+\label{chap:conclusao}
+
+Desenvolvemos um módulo em Rust que integra o Biscuit e o JWT com sistemas de autenticação e autorização do Mosquitto por FFI, assim como uma suíte de testes que permite reproduzir as cargas, verificar as decisões de acesso e medir o desempenho da autorização local e da autorização por consulta a uma segunda fonte de políticas.
+
+Os testes confirmaram a viabilidade funcional do Biscuit, prevista na $\mathbf{H}_1$, nos fluxos avaliados com os dois formatos, da autenticação até a renovação da credencial durante uma conexão ativa, incluindo a publicação e o bloqueio de entregas, conforme a política. Nos testes com o Biscuit, um cliente também conseguiu atenuar permissões e transferir a credencial derivada para outro publicar sem precisar de uma nova emissão.
+
+A equivalência de desempenho prevista na $\mathbf{H}_2$ se verificou, pela margem descritiva de 10\%, em 22 das 29 condições com as mesmas regras HTTP. Nas comparações com autorização pelo token ou por ACLs estáticas, pelo menos uma das medidas ficou fora da margem em cada condição. Os testes também mostraram que a profundidade da cadeia e a complexidade das regras podem elevar a latência de cauda, enquanto a MTU condiciona a segmentação do \texttt{CONNECT}.
+
+Os resultados sustentam bem a $\mathbf{H}_3$ para as arquiteturas testadas. Nas dez condições com QoS 1 ou 2, os dois arranjos autorizaram todas as publicações previstas, e o Biscuit avaliado localmente apresentou menor p95 de publicação nas três rodadas em comparação com o arranjo que usava o JWT e consultava o serviço HTTP a cada publicação. Em nove dessas condições, o Biscuit local também apresentou maior vazão nas três rodadas.
+
+Em termos ergonômicos, o autor não considerou que escrever e manter políticas em Datalog ou usar o Biscuit como token fosse muito mais complexo do que recorrer aos outros métodos, sobretudo quando se leva em conta que, em certos casos de uso, o Biscuit dispensa a configuração e a manutenção de uma fonte de políticas separada da aplicação. Trata-se, é claro, de uma impressão subjetiva.
+
+A avaliação de segurança abrangeu as decisões de acesso testadas, sem testes especializados.
+
+Para aplicações que precisam delegar permissões sem consultar o emissor, o Biscuit é uma opção, embora a escolha da fonte de políticas deva considerar quanto tempo uma alteração de acesso pode levar para produzir efeito e o custo da consulta externa, dada a carga esperada do caso de uso.
 
 \chapter{Trabalhos Futuros}
 
