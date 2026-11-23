@@ -30,7 +30,7 @@ O JWT pode carregar permissões para avaliação local, como ocorre em alguns do
 
 O Biscuit oferece uma alternativa por meio de uma linguagem lógica declarativa (Datalog) e de uma cadeia de assinaturas que permite ao portador acrescentar restrições sem consultar o emissor. Entretanto, essa complexidade levanta uma questão crítica de viabilidade técnica, em especial sobre o custo computacional que pode acarretar.
 
-Nos trabalhos consultados, não encontramos uma comparação experimental entre Biscuit e JWT no Mosquitto que medisse latência, vazão e consumo de recursos. Investigamos, portanto, a viabilidade do Biscuit nesse ambiente e o custo de avaliar as permissões localmente ou consultar uma fonte externa.
+Nos trabalhos consultados, não encontramos uma comparação experimental entre o Biscuit e o JWT no Mosquitto que medisse latência, vazão e consumo de recursos. Investigamos, portanto, a viabilidade do Biscuit nesse ambiente e o custo de avaliar as permissões localmente ou consultar uma fonte externa.
 
 \section{Objetivo Geral}
 
@@ -40,7 +40,7 @@ Desenvolver e avaliar um módulo de extensão para o \emph{broker} Mosquitto que
 
 \begin{itemize}
     \item Projetar a arquitetura de um módulo de extensão de autenticação e autorização para o Mosquitto, definindo a interação via \emph{Foreign Function Interface} (FFI) entre a base em C do \emph{broker} e a lógica de segurança em Rust.
-    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, e oferecer suporte a JWT para comparar os fluxos de autenticação e autorização comuns aos dois formatos.
+    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, e oferecer suporte ao JWT para comparar os fluxos de autenticação e autorização comuns aos dois formatos.
     \item Estabelecer uma suíte de testes reprodutíveis que simulem padrões reais de uso do MQTT, medindo a latência de conexão, a vazão de mensagens, o consumo de recursos e o tamanho das credenciais.
     \item Executar experimentos comparativos em ambiente conteinerizado, variando a carga de clientes e a complexidade das políticas de acesso para estressar os mecanismos de verificação.
     \item Analisar os resultados quantitativos para avaliar a viabilidade do Biscuit nos cenários testados, propondo orientações para a adoção de modelos de autorização descentralizados neste ecossistema.

@@ -7,7 +7,7 @@ A avaliação foi predominantemente quantitativa, com apoio da documentação da
 \begin{itemize}
   \item $\mathbf{H}_1$: O Biscuit é funcionalmente viável no Mosquitto e cobre todos os casos de autenticação e autorização que o JWT pode atender nesse \emph{broker}.
   \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários nos quais ambos oferecem a mesma funcionalidade, como a autenticação de clientes e a verificação de integridade da credencial.
-  \item $\mathbf{H}_3$: Em cenários de autorização complexos, quando o arranjo com JWT consulta um serviço externo a cada operação, a avaliação local com Biscuit apresenta menor latência e maior vazão.
+  \item $\mathbf{H}_3$: Em cenários de autorização complexos, quando o arranjo com o JWT consulta um serviço externo a cada operação, a avaliação local com o Biscuit apresenta menor latência e maior vazão.
 \end{itemize}
 
 Entre as variáveis independentes, a primária foi o \textbf{tipo de token}, cruzado com diferentes fontes de políticas, entre elas as permissões no próprio token, as ACLs estáticas nativas do Mosquitto, as ACLs dinâmicas do módulo \emph{Dynamic Security}, o banco de dados local em SQLite e o serviço externo de autorização via HTTP. A campanha também incluiu cenários em modo híbrido.
@@ -32,15 +32,15 @@ O ambiente experimental reuniu cinco entidades lógicas distintas:
 
 O fluxo de consulta ao PIP variou conforme a fonte de políticas configurada em cada cenário.
 
-\textbf{Fluxo Biscuit:} Visto que o Biscuit suporta atenuação de direitos dentro dos limites definidos pelo emissor, as permissões máximas são estabelecidas na criação do token, e o cliente pode acrescentar restrições à credencial que recebeu. Nos cenários de autorização local, o próprio token atua como um PIP portável, a partir do qual o PDP avalia as permissões no momento do acesso.
+\textbf{Fluxo com o Biscuit:} Visto que o Biscuit suporta atenuação de direitos dentro dos limites definidos pelo emissor, as permissões máximas são estabelecidas na criação do token, e o cliente pode acrescentar restrições à credencial que recebeu. Nos cenários de autorização local, o próprio token atua como um PIP portável, a partir do qual o PDP avalia as permissões no momento do acesso.
 
-\textbf{Fluxo JWT:} Nos cenários com autorização externa, o JWT carrega a identidade ou o papel do cliente, e o PDP consulta a fonte de políticas no momento da operação para decidir se o acesso deve ser permitido. Nos cenários com autorização local, o PDP verifica as permissões carregadas no próprio JWT.
+\textbf{Fluxo com o JWT:} Nos cenários com autorização externa, o JWT carrega a identidade ou o papel do cliente, e o PDP consulta a fonte de políticas no momento da operação para decidir se o acesso deve ser permitido. Nos cenários com autorização local, o PDP verifica as permissões carregadas no próprio JWT.
 
-Para comparar os formatos sob a mesma fonte de políticas, também executamos com Biscuit os cenários selecionados em que o JWT identificava o cliente ou informava seu papel e as permissões eram consultadas no momento do acesso. Nas variantes com vínculo de identidade, exigimos que a identidade registrada no token correspondesse ao identificador MQTT do cliente.
+Para comparar os formatos sob a mesma fonte de políticas, também executamos com o Biscuit os cenários selecionados em que o JWT identificava o cliente ou informava seu papel e as permissões eram consultadas no momento do acesso. Nas variantes com vínculo de identidade, exigimos que a identidade registrada no token correspondesse ao identificador MQTT do cliente.
 
 \section{Solução Implementada}
 
-A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo \ref{chap:implementacao}.
+A solução consiste em um módulo de extensão em Rust para autenticação e autorização com o JWT e o Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo \ref{chap:implementacao}.
 
 \section{Ambiente Experimental}
 
@@ -58,7 +58,7 @@ Na matriz geral, executamos cargas de 10 e 100 mensagens por cliente com 10 e 50
 
 \textbf{Problema da manada e reconexão:} Para reproduzir o pico de conexões conhecido como problema da manada (\emph{thundering herd}), reiniciamos o Mosquitto e, depois de confirmar que o \emph{broker} já aceitava conexões, usamos uma barreira para que os clientes iniciassem suas conexões em um intervalo curto. Já nos cenários de reconexão, os clientes passaram por ciclos de desconexão, nova conexão e publicação, incluindo variantes em que solicitavam credenciais novas ao emissor.
 
-\textbf{Complexidade de Políticas:} Variamos o comprimento da cadeia Biscuit entre 1, 5 e 25 blocos, mantendo as regras, e utilizamos outra série de cenários para variar as verificações em Datalog, incluindo condições de tempo. Para a autorização externa, utilizamos perfis com diferentes conjuntos de regras, e registramos, junto à carga de publicação, a quantidade de consultas e o trabalho de avaliação que o serviço informou.
+\textbf{Complexidade de Políticas:} Variamos o comprimento da cadeia do Biscuit entre 1, 5 e 25 blocos, mantendo as regras, e utilizamos outra série de cenários para variar as verificações em Datalog, incluindo condições de tempo. Para a autorização externa, utilizamos perfis com diferentes conjuntos de regras, e registramos, junto à carga de publicação, a quantidade de consultas e o trabalho de avaliação que o serviço informou.
 
 \textbf{Latência Externa:} Introduzimos um atraso de 200 ms no serviço de autorização em cenários com os dois formatos, com e sem TLS, para observar o efeito do atraso na latência e na vazão das publicações.
 
@@ -84,16 +84,16 @@ Para avaliar a $\mathbf{H}_1$, utilizamos os resultados dos testes funcionais de
 
 \chapter{Trabalhos Futuros}
 
-Como a campanha injetou falhas parciais e totais do serviço HTTP apenas com JWT, seria útil repetir esses ensaios com Biscuit, sob as mesmas cargas e condições de falha, para verificar quais operações permanecem autorizadas quando o módulo recorre à política do token.
+Como a campanha injetou falhas parciais e totais do serviço HTTP apenas com o JWT, seria útil repetir esses ensaios com o Biscuit, sob as mesmas cargas e condições de falha, para verificar quais operações permanecem autorizadas quando o módulo recorre à política do token.
 
-Os ensaios com atraso de 200 ms permitem comparar JWT e Biscuit com e sem TLS. A partir desses dados, seria possível estudar o efeito do atraso sobre a latência de publicação e a vazão, estendendo a comparação a 1 segundo, condição para a qual a campanha reuniu dados apenas com JWT.
+Os ensaios com atraso de 200 ms permitem comparar o JWT e o Biscuit com e sem TLS. A partir desses dados, seria possível estudar o efeito do atraso sobre a latência de publicação e a vazão, estendendo a comparação a 1 segundo, condição para a qual a campanha reuniu dados apenas com o JWT.
 
-As capturas com JWT a 200 e 9.000 bytes podem orientar os ensaios de MTU com Biscuit, nos quais se observaria a segmentação do \texttt{CONNECT} e o tempo de conexão. Para testar 9.000 bytes, é preciso verificar se todas as interfaces entre o cliente e o \emph{broker} suportam essa MTU.
+As capturas com o JWT a 200 e 9.000 bytes podem orientar os ensaios de MTU com o Biscuit, nos quais se observaria a segmentação do \texttt{CONNECT} e o tempo de conexão. Para testar 9.000 bytes, é preciso verificar se todas as interfaces entre o cliente e o \emph{broker} suportam essa MTU.
 
 A repetição dos testes em dispositivos embarcados pode revelar gargalos de processamento que não aparecem no ambiente conteinerizado da campanha. Fundamentalmente, isso possibilitaria a avaliação precisa do consumo energético comparativo entre as soluções de token, uma métrica crítica para dispositivos operados a bateria.
 
-Além do Biscuit, existem outros tokens emergentes com arquiteturas promissoras, como Macaroons e PASETO. Expandir a avaliação comparativa para incluir essas tecnologias ofereceria uma visão mais abrangente das alternativas modernas ao JWT.
+Além do Biscuit, existem outros tokens emergentes com arquiteturas promissoras, como os Macaroons e o PASETO. Expandir a avaliação comparativa para incluir essas tecnologias ofereceria uma visão mais abrangente das alternativas modernas ao JWT.
 
-Similarmente, o desenvolvimento de módulos de extensão para outros \emph{brokers} MQTT, como EMQX, VerneMQ e NanoMQ, seria de grande valia.
+Similarmente, o desenvolvimento de módulos de extensão para outros \emph{brokers} MQTT, como o EMQX, o VerneMQ e o NanoMQ, seria de grande valia.
 
 Por fim, uma análise formal de segurança do módulo desenvolvido, incluindo testes de intrusão e verificação formal do código em Rust, seria um passo essencial para validar a robustez da solução.

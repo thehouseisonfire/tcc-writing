@@ -4,16 +4,16 @@
 
 Para os cenários comparativos, o Mosquitto oferece ACLs estáticas e ACLs gerenciadas em tempo de execução pelo módulo \emph{Dynamic Security} \cite{eclipse_mosquitto_conf,eclipse_mosquitto_dynamic}.
 
-\section{Comparação entre JWT e Biscuit}
+\section{Comparação entre o JWT e o Biscuit}
 
 Na comparação realizada, importa onde a política é avaliada. Um JWT pode ser validado localmente; o acesso a uma fonte externa de políticas depende da arquitetura adotada. O Biscuit permite anexar restrições ao token sem solicitar uma nova emissão. Nos testes, a quantidade de blocos de atenuação e a complexidade das verificações em Datalog são parâmetros para avaliar o custo da verificação local \cite{rfc7519,biscuit_spec,biscuit_cryptography}.
 
 \chapter{Trabalhos Relacionados}
 
-O \texttt{mosquitto-go-auth} serviu de precedente para integrar JWT ao Mosquitto. O levantamento do TCC identifica o arquivamento desse módulo e do \texttt{mosquitto-auth-plug}, além da ausência de suporte ao Biscuit nessas extensões. O módulo oficial \emph{Dynamic Security} serve de referência para ACLs dinâmicas \cite{mosquitto_go_auth,mosquitto_auth_plug,eclipse_mosquitto_dynamic}.
+O \texttt{mosquitto-go-auth} serviu de precedente para integrar o JWT ao Mosquitto. O levantamento do TCC identifica o arquivamento desse módulo e do \texttt{mosquitto-auth-plug}, além da ausência de suporte ao Biscuit nessas extensões. O módulo oficial \emph{Dynamic Security} serve de referência para ACLs dinâmicas \cite{mosquitto_go_auth,mosquitto_auth_plug,eclipse_mosquitto_dynamic}.
 
-\citeonline{philipp2023_daxiot} estudam autorização descentralizada em MQTT com identificadores descentralizados e credenciais verificáveis. \citeonline{anantharaman2019} analisam delegação offline com Macaroons em sistemas de publicação e assinatura. \citeonline{cochak2024} discutem tokens encadeados e agregação de assinaturas como forma de reduzir o custo de verificação.
+\citeonline{philipp2023_daxiot} estudam autorização descentralizada em MQTT com identificadores descentralizados e credenciais verificáveis. \citeonline{anantharaman2019} analisam delegação offline com os Macaroons em sistemas de publicação e assinatura. \citeonline{cochak2024} discutem tokens encadeados e agregação de assinaturas como forma de reduzir o custo de verificação.
 
 \citeonline{fossen2022exploring} apontam o Biscuit como possibilidade para controle de acesso baseado em capacidades em Rust. \citeonline{identity_management_for_agents} discutem o Biscuit e os Macaroons no contexto da delegação entre agentes. A integração da Clever Cloud com o Apache Pulsar oferece um precedente de uso do Biscuit em mensageria, em um ambiente distinto do Mosquitto \cite{clever_cloud_pulsar}.
 
-A lacuna identificada no levantamento é a comparação experimental entre Biscuit e JWT para autenticação e autorização no Mosquitto, com medições de desempenho e consumo de recursos.
+A lacuna identificada no levantamento é a comparação experimental entre o Biscuit e o JWT para autenticação e autorização no Mosquitto, com medições de desempenho e consumo de recursos.

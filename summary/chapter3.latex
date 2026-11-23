@@ -7,18 +7,18 @@ A avaliação é predominantemente quantitativa, complementada pela documentaç�
 \begin{itemize}
   \item $\mathbf{H}_1$: O Biscuit é funcionalmente viável no Mosquitto e cobre todos os casos de autenticação e autorização que o JWT pode atender nesse \emph{broker}.
   \item $\mathbf{H}_2$: O token Biscuit apresenta desempenho equivalente ao JWT em cenários nos quais ambos oferecem a mesma funcionalidade, como a autenticação de clientes e a verificação de integridade da credencial.
-  \item $\mathbf{H}_3$: Em cenários de autorização complexos, quando o arranjo com JWT consulta um serviço externo a cada operação, a avaliação local com Biscuit apresenta menor latência e maior vazão.
+  \item $\mathbf{H}_3$: Em cenários de autorização complexos, quando o arranjo com o JWT consulta um serviço externo a cada operação, a avaliação local com o Biscuit apresenta menor latência e maior vazão.
 \end{itemize}
 
 Variamos o tipo de token, a fonte de políticas, a carga, o QoS e a complexidade das regras. Medimos latências, vazão e consumo de recursos do \emph{broker}, mantendo a máquina hospedeira e as imagens dos serviços ao longo da campanha.
 
 \subsection{Entidades e Fluxos}
 
-O emissor define as permissões iniciais, o cliente apresenta o token e o módulo decide se o Mosquitto deve permitir a operação. Comparamos os formatos sob a mesma fonte de políticas e, nos testes com vínculo de identidade, exigimos para ambos a correspondência entre a identidade no token e o identificador MQTT. Também comparamos a autorização local com Biscuit à autorização por consulta HTTP com JWT.
+O emissor define as permissões iniciais, o cliente apresenta o token e o módulo decide se o Mosquitto deve permitir a operação. Comparamos os formatos sob a mesma fonte de políticas e, nos testes com vínculo de identidade, exigimos para ambos a correspondência entre a identidade no token e o identificador MQTT. Também comparamos a autorização local com o Biscuit à autorização por consulta HTTP com o JWT.
 
 \section{Solução Implementada}
 
-A solução consiste em um módulo de extensão em Rust para autenticação e autorização com JWT e Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo \ref{chap:implementacao}.
+A solução consiste em um módulo de extensão em Rust para autenticação e autorização com o JWT e o Biscuit no Mosquitto. A integração com o \emph{broker}, o tratamento das credenciais e as fontes de políticas são descritos no Capítulo \ref{chap:implementacao}.
 
 \section{Ambiente Experimental}
 
@@ -29,10 +29,10 @@ O Docker Compose reuniu o Mosquitto e os serviços auxiliares. As cargas foram e
 A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 clientes, e 10 mensagens por cliente para cargas de 200 clientes, em três rodadas. Utilizamos casos-base sem autenticação, com o módulo \emph{Dynamic Security} e com autorização pelo próprio token.
 
 \begin{itemize}
-  \item \textbf{Unidade máxima de transmissão (MTU):} Comparamos JWT e Biscuit de 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS.
+  \item \textbf{Unidade máxima de transmissão (MTU):} Comparamos o JWT e o Biscuit de 25 blocos sob MTUs de 500 e 1.500 bytes, com e sem TLS.
   \item \textbf{Problema da manada e reconexão:} Sincronizamos as conexões após reiniciar o Mosquitto e exercitamos, em cenários próprios, ciclos de reconexão.
   \item \textbf{Complexidade das políticas:} Variamos o Biscuit entre 1, 5 e 25 blocos com as mesmas regras, e, em outra série, variamos as verificações em Datalog. Também testamos perfis de regras HTTP.
-  \item \textbf{Latência externa:} Introduzimos um atraso de 200 ms no serviço de autorização para JWT e Biscuit, com e sem TLS.
+  \item \textbf{Latência externa:} Introduzimos um atraso de 200 ms no serviço de autorização para o JWT e o Biscuit, com e sem TLS.
   \item \textbf{Arquitetura híbrida:} Testamos a entrega a múltiplos assinantes com políticas HTTP e híbridas.
   \item \textbf{Revogação:} Alteramos permissões durante o tráfego e, nos testes de ciclo de vida, exercitamos a renovação por \texttt{AUTH}.
   \item \textbf{Delegação:} Um cliente derivou um Biscuit com permissões limitadas e o transferiu para outro cliente publicar \cite{identity_management_for_agents}.
@@ -42,10 +42,10 @@ A matriz geral incluiu 10 e 100 mensagens por cliente para cargas de 10 e 50 cli
 
 O gerador de carga registrou as medições do cliente, o módulo forneceu contadores de autenticação e autorização, e o Prometheus coletou amostras de CPU e memória do cAdvisor \cite{prometheus}. Os testes de MTU incluíram capturas com \texttt{tcpdump}. Com o TShark, remontamos os pacotes \texttt{CONNECT} sem TLS e medimos os bytes do campo \texttt{password} e os segmentos TCP por pacote MQTT. Após uma correção na contagem de sessões TCP, a auditoria revalidou as capturas aceitas da campanha com os mesmos intervalos de medição e critérios de aceitação.
 
-O índice da auditoria vincula cada resultado aceito à configuração e à rodada. Os testes funcionais fornecem a evidência para a $\mathbf{H}_1$, as operações correspondentes para JWT e Biscuit fornecem os dados para a $\mathbf{H}_2$, e a comparação entre autorização local e externa fornece os dados para a $\mathbf{H}_3$.
+O índice da auditoria vincula cada resultado aceito à configuração e à rodada. Os testes funcionais fornecem a evidência para a $\mathbf{H}_1$, as operações correspondentes para o JWT e o Biscuit fornecem os dados para a $\mathbf{H}_2$, e a comparação entre autorização local e externa fornece os dados para a $\mathbf{H}_3$.
 
 \chapter{Trabalhos Futuros}
 
-Comparar JWT e Biscuit sob as mesmas falhas parciais e totais do serviço HTTP, analisar os ensaios com atraso de 200 ms e ampliar a comparação para 1 segundo. Estender os testes de MTU a 200 e 9.000 bytes, verificando a configuração de toda a rede no segundo caso.
+Comparar o JWT e o Biscuit sob as mesmas falhas parciais e totais do serviço HTTP, analisar os ensaios com atraso de 200 ms e ampliar a comparação para 1 segundo. Estender os testes de MTU a 200 e 9.000 bytes, verificando a configuração de toda a rede no segundo caso.
 
-Repetir os experimentos em dispositivos físicos para medir o consumo energético, incluir Macaroons e PASETO na comparação, portar a integração para EMQX, VerneMQ ou NanoMQ e realizar uma avaliação formal de segurança do módulo.
+Repetir os experimentos em dispositivos físicos para medir o consumo energético, incluir os Macaroons e o PASETO na comparação, portar a integração para o EMQX, o VerneMQ ou o NanoMQ e realizar uma avaliação formal de segurança do módulo.

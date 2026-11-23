@@ -3,7 +3,7 @@
 
 \section{Problema}
 
-O trabalho investiga a viabilidade do Biscuit para autenticação e autorização no Mosquitto. A comparação com JWT avalia o custo computacional da atenuação e da delegação sem contato com o emissor, bem como o efeito de consultar serviços externos para obter decisões de autorização.
+O trabalho investiga a viabilidade do Biscuit para autenticação e autorização no Mosquitto. A comparação com o JWT avalia o custo computacional da atenuação e da delegação sem contato com o emissor, bem como o efeito de consultar serviços externos para obter decisões de autorização.
 
 \section{Objetivo Geral}
 
@@ -13,7 +13,7 @@ Desenvolver e avaliar um módulo de extensão para o \emph{broker} Mosquitto que
 
 \begin{itemize}
     \item Projetar a arquitetura de um módulo de extensão de autenticação e autorização para o Mosquitto, definindo a interação via \emph{Foreign Function Interface} (FFI) entre a base em C do \emph{broker} e a lógica de segurança em Rust.
-    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, com suporte a JWT para comparar os fluxos comuns aos dois formatos.
+    \item Implementar um protótipo funcional capaz de validar tokens Biscuit, suportando fluxos de atenuação de privilégios e delegação descentralizada, com suporte ao JWT para comparar os fluxos comuns aos dois formatos.
     \item Estabelecer uma suíte de testes reprodutíveis que simulem padrões reais de uso do MQTT, medindo a latência de conexão, a vazão de mensagens, o consumo de recursos e o tamanho das credenciais.
     \item Executar experimentos comparativos em ambiente conteinerizado, variando a carga de clientes e a complexidade das políticas de acesso para estressar os mecanismos de verificação.
     \item Analisar os resultados quantitativos para avaliar a viabilidade do Biscuit nos cenários testados, propondo orientações para a adoção de modelos de autorização descentralizados neste ecossistema.
