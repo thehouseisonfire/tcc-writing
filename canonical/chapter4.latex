@@ -91,7 +91,7 @@ Também comparamos as cadeias de 5 e 25 blocos em uma série com mais cargas e n
 
 Para as regras em Datalog, o perfil mais complexo apresentou p95 de publicação maior que o perfil mais simples em todas as rodadas das três cargas sem TLS. Ao repetir essas cargas com TLS, a diferença se manteve nas três rodadas de apenas uma delas. Na comparação entre os perfis alto e médio, que abrangeu as dez combinações de carga em QoS 1 ou 2 sem TLS, o p95 de publicação foi maior com o perfil alto nas três rodadas de oito combinações. O tempo acumulado de CPU do contêiner do \emph{broker} também foi maior nas três rodadas de seis das combinações, enquanto a memória média foi menor nas rodadas de cinco e a vazão acabou variando em ambas as direções.
 
-Como os perfis em Datalog também variaram o tamanho da credencial, as medições refletem o custo de cada configuração completa no \emph{broker}.
+Na carga da Tabela \ref{tab:resultados-complexidade}, passar de 1 para 25 blocos elevou o p95 de publicação de 0,59 para 1,05 ms, enquanto a vazão permaneceu próxima de 32 mensagens por segundo. A cadeia mais longa, portanto, pode aumentar o tempo de espera pela confirmação de parte das publicações, mesmo que o \emph{broker} continue atendendo praticamente o mesmo número de mensagens por segundo. Já nos testes com Datalog, as regras e o tamanho da credencial variaram juntos, de modo que as medições refletem o custo de cada configuração completa.
 
 \section{Tamanho da credencial e segmentação TCP}
 \label{sec:resultados-mtu}
@@ -117,9 +117,9 @@ O campo \texttt{password} continha de 2.889 a 2.891 bytes com o Biscuit de 25 bl
     {\footnotesize Fonte: elaboração própria com dados da campanha final.\par}
 \end{table}
 
-Nas capturas sem TLS, ao reduzir a MTU de 1.500 para 500 bytes, o \texttt{CONNECT} do Biscuit de 25 blocos passou de três para sete segmentos, enquanto o JWT continuou ocupando um único segmento. Para o mesmo Biscuit, porém, a razão mediana entre o p95 de conexão na MTU menor e na maior variou de 0,95 a 1,09 nas cargas com e sem TLS. Ou seja, o aumento da segmentação acabou por não se tornar um aumento uniforme do tempo de conexão.
+Nas capturas sem TLS, ao reduzir a MTU de 1.500 para 500 bytes, o \texttt{CONNECT} do Biscuit de 25 blocos passou de três para sete segmentos, enquanto o JWT continuou ocupando um único segmento. Para o mesmo Biscuit, a razão mediana entre o p95 de conexão na MTU menor e na maior variou de 0,95 a 1,09 nas cargas com e sem TLS.
 
-Ao comparar os formatos em cada MTU, o p95 de conexão do Biscuit foi maior nas três rodadas de quatro das seis condições sem TLS, e de duas das seis condições com TLS. Como o tempo medido vai até a confirmação da conexão, a diferença acaba por incluir tanto a transmissão quanto o processamento de credenciais distintas pelo \emph{broker}.
+Ao comparar os formatos em cada MTU, o p95 de conexão do Biscuit foi maior nas três rodadas de quatro das seis condições sem TLS, e de duas das seis condições com TLS. Como o tempo medido inclui tanto a transmissão quanto o processamento da credencial pelo \emph{broker}, a comparação com o mesmo token nas duas MTUs é a que melhor mostra o efeito de reduzir esse limite. No caso do Biscuit, a redução da MTU se refletiu mais claramente no número de segmentos do que no tempo até a confirmação da conexão.
 
 \section{Autorização local e consulta HTTP}
 \label{sec:resultados-http}
@@ -128,7 +128,7 @@ Para avaliar a $\mathbf{H}_3$, comparamos duas formas de decidir se uma publica�
 
 Com a avaliação local, o p95 de publicação foi menor nas três rodadas das dez condições com QoS 1 ou 2. Em nove delas, também houve mais publicações autorizadas e confirmadas por segundo nas três rodadas. A Tabela \ref{tab:resultados-http-exemplo} mostra o caso de 50 clientes com 10 mensagens por cliente em QoS 1. Nessa carga, o Biscuit teve de 1,48 a 2,79 vezes a vazão do JWT, com razão mediana de 1,86. Para calcular a vazão, usamos a duração da execução dos clientes, que abrange a conexão e a publicação das mensagens.
 
-\begin{table}[htbp]
+\begin{table}[H]
     \centering
     \caption{Autorização local e HTTP com 50 clientes, 10 mensagens por cliente e QoS 1}
     \label{tab:resultados-http-exemplo}
@@ -147,7 +147,7 @@ Com a avaliação local, o p95 de publicação foi menor nas três rodadas das d
     {\footnotesize Fonte: elaboração própria com dados da campanha final.\par}
 \end{table}
 
-Os resultados sustentam a vantagem prevista na $\mathbf{H}_3$ para as publicações com confirmação nos casos testados, em que a avaliação local não sofre da espera por uma resposta HTTP a cada mensagem. O tamanho dessa vantagem pode variar, dependendo das regras avaliadas, do tempo de resposta do serviço, e de quantos clientes publicam ao mesmo tempo.
+Os resultados sustentam a vantagem prevista na $\mathbf{H}_3$ para as publicações com confirmação nos casos testados, em que a avaliação local não sofre com a espera por uma resposta HTTP a cada mensagem. O tamanho dessa vantagem pode variar, dependendo das regras avaliadas, do tempo de resposta do serviço, e de quantos clientes publicam ao mesmo tempo.
 
 \section{Implicações para a adoção no Mosquitto}
 \label{sec:resultados-implicacoes}
