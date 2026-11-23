@@ -98,7 +98,7 @@ Como os perfis em Datalog também variaram o tamanho da credencial, as mediçõe
 
 Nos testes com MTUs de 500 e 1.500 bytes, os pacotes IP respeitaram o limite configurado nas 72 capturas analisadas, sem fragmentação observada. Nas 36 capturas sem TLS, remontamos os pacotes MQTT \texttt{CONNECT}, o que nos permitiu contar os segmentos TCP usados para transportá-los e assim medir o tamanho do campo \texttt{password}. Nas conexões com TLS, pudemos observar o tráfego TCP nas portas usadas pelo MQTT ao longo da carga, mas a identificação de cada \texttt{CONNECT} exigiria descriptografar a sessão.
 
-A depender do cliente, o campo \texttt{password} continha de 2.889 a 2.891 bytes com o Biscuit de 25 blocos e de 338 a 346 bytes com o JWT. A Tabela \ref{tab:resultados-mtu} mostra como essa diferença apareceu no número de segmentos que transportaram o \texttt{CONNECT} em cada MTU.
+O campo \texttt{password} continha de 2.889 a 2.891 bytes com o Biscuit de 25 blocos e de 338 a 346 bytes com o JWT (conforme o número de dígitos no identificador do cliente). A Tabela \ref{tab:resultados-mtu} mostra como a diferença de tamanho entre os dois tokens apareceu no número de segmentos que transportaram o \texttt{CONNECT} em cada MTU.
 
 \begin{table}[htbp]
     \centering
